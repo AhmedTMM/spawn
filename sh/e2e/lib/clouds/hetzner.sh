@@ -40,7 +40,7 @@ _hetzner_headless_env() {
   # $2 = agent (unused but part of the interface)
 
   printf 'export HETZNER_SERVER_NAME="%s"\n' "${app}"
-  printf 'export HETZNER_SERVER_TYPE="%s"\n' "${HETZNER_SERVER_TYPE:-cx23}"
+  printf 'export HETZNER_SERVER_TYPE="%s"\n' "${HETZNER_SERVER_TYPE:-cx32}"
   printf 'export HETZNER_LOCATION="%s"\n' "${HETZNER_LOCATION:-fsn1}"
 }
 
@@ -293,4 +293,13 @@ _hetzner_cleanup_stale() {
   if [ "${skipped}" -gt 0 ]; then
     log_info "Skipped ${skipped} recent Hetzner instance(s)"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# _hetzner_max_parallel
+#
+# Hetzner accounts have a primary IP limit (~5 for most accounts).
+# ---------------------------------------------------------------------------
+_hetzner_max_parallel() {
+  printf '5'
 }
