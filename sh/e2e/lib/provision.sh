@@ -20,9 +20,9 @@ provision_agent() {
   local app_name="$2"
   local log_dir="$3"
 
-  local exit_file="${log_dir}/${agent}.exit"
-  local stdout_file="${log_dir}/${agent}.stdout"
-  local stderr_file="${log_dir}/${agent}.stderr"
+  local exit_file="${log_dir}/${app_name}.exit"
+  local stdout_file="${log_dir}/${app_name}.stdout"
+  local stderr_file="${log_dir}/${app_name}.stderr"
 
   # Resolve CLI entry point
   # SPAWN_CLI_DIR overrides auto-resolution — use this to force local source code
