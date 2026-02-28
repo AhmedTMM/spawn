@@ -48,6 +48,7 @@ provision_agent() {
     export SPAWN_NON_INTERACTIVE=1
     export SPAWN_SKIP_GITHUB_AUTH=1
     export SPAWN_SKIP_API_VALIDATION=1
+    export SPAWN_NO_UPDATE_CHECK=1
     export MODEL_ID="${MODEL_ID:-openrouter/auto}"
     export OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 
