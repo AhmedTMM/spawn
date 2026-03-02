@@ -127,8 +127,44 @@ CLOUD_ENV
     sleep 5
     log_ok "Install completed (.spawnrc found)"
     return 0
-  else
-    log_warn ".spawnrc not found after ${effective_install_wait}s — install may still be running"
-    return 0  # Continue to verification; it will catch real failures
   fi
+
+  # Fallback: CLI was killed before writing .spawnrc (provision timeout race).
+  # Construct .spawnrc manually via SSH using available env vars.
+  log_warn ".spawnrc not found after ${effective_install_wait}s — attempting manual creation"
+  local api_key="${OPENROUTER_API_KEY:-}"
+  if [ -z "${api_key}" ]; then
+    log_err "Cannot create .spawnrc fallback — OPENROUTER_API_KEY not set"
+    return 0
+  fi
+
+  # Build env lines from manifest agent config (agent-specific vars)
+  local env_lines="# [spawn:env]
+export IS_SANDBOX='1'
+export OPENROUTER_API_KEY='${api_key}'"
+
+  # Add agent-specific env vars
+  case "${agent}" in
+    openclaw)
+      env_lines="${env_lines}
+export ANTHROPIC_API_KEY='${api_key}'
+export ANTHROPIC_BASE_URL='https://openrouter.ai/api'"
+      ;;
+    zeroclaw)
+      env_lines="${env_lines}
+export ZEROCLAW_PROVIDER='openrouter'
+export OPENAI_API_KEY='${api_key}'
+export OPENAI_BASE_URL='https://openrouter.ai/api/v1'"
+      ;;
+  esac
+
+  local env_b64
+  env_b64=$(printf '%s\n' "${env_lines}" | base64 | tr -d '\n')
+  if cloud_exec "${app_name}" "printf '%s' '${env_b64}' | base64 -d > ~/.spawnrc && chmod 600 ~/.spawnrc && \
+    grep -q 'source ~/.spawnrc' ~/.bashrc 2>/dev/null || echo '[ -f ~/.spawnrc ] && source ~/.spawnrc' >> ~/.bashrc" >/dev/null 2>&1; then
+    log_ok "Manual .spawnrc created successfully"
+  else
+    log_err "Failed to create manual .spawnrc"
+  fi
+  return 0
 }
