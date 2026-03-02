@@ -8,6 +8,8 @@ import {
   logWarn,
   logError,
   logStep,
+  logStepInline,
+  logStepDone,
   prompt,
   selectFromList,
   getSpawnCloudConfigPath,
@@ -939,6 +941,7 @@ export async function waitForInstance(maxAttempts = 60): Promise<void> {
       }
 
       instanceIp = ip.trim();
+      logStepDone();
       logInfo(`Instance running: IP=${instanceIp}`);
 
       // Save connection info
@@ -946,10 +949,11 @@ export async function waitForInstance(maxAttempts = 60): Promise<void> {
       return;
     }
 
-    logStep(`Instance state: ${state || "pending"} (${attempt}/${maxAttempts})`);
+    logStepInline(`Instance state: ${state || "pending"} (${attempt}/${maxAttempts})`);
     await sleep(pollDelay);
   }
 
+  logStepDone();
   logError(`Instance did not become running after ${maxAttempts} checks`);
   throw new Error("Instance start timeout");
 }
@@ -996,16 +1000,18 @@ export async function waitForCloudInit(maxAttempts = 60): Promise<void> {
       ]);
       const exitCode = await proc.exited;
       if (exitCode === 0 && stdout.includes("done")) {
+        logStepDone();
         logInfo("Cloud-init complete");
         return;
       }
     } catch {
       // ignore
     }
-    logStep(`Cloud-init still running (${attempt}/${maxAttempts})`);
+    logStepInline(`Cloud-init still running (${attempt}/${maxAttempts})`);
     await sleep(5000);
   }
 
+  logStepDone();
   logWarn("Cloud-init did not complete in time, continuing anyway...");
 }
 
