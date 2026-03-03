@@ -313,11 +313,11 @@ export async function startGateway(runner: CloudRunner): Promise<void> {
     `if ${portCheck}; then echo "Gateway already running"; exit 0; fi; ` +
     'if command -v setsid >/dev/null 2>&1; then setsid "$_oc_bin" gateway > /tmp/openclaw-gateway.log 2>&1 < /dev/null & ' +
     'else nohup "$_oc_bin" gateway > /tmp/openclaw-gateway.log 2>&1 < /dev/null & fi; ' +
-    "elapsed=0; while [ $elapsed -lt 120 ]; do " +
+    "elapsed=0; while [ $elapsed -lt 300 ]; do " +
     `if ${portCheck}; then echo "Gateway ready after \${elapsed}s"; exit 0; fi; ` +
     "printf '.'; sleep 1; elapsed=$((elapsed + 1)); " +
     "done; " +
-    'echo "Gateway failed to start after 120s"; tail -20 /tmp/openclaw-gateway.log 2>/dev/null; exit 1';
+    'echo "Gateway failed to start after 300s"; tail -20 /tmp/openclaw-gateway.log 2>/dev/null; exit 1';
   await runner.runServer(script);
   logInfo("OpenClaw gateway started");
 }

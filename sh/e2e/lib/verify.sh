@@ -88,11 +88,11 @@ _openclaw_ensure_gateway() {
       _oc_bin=\$(command -v openclaw) || exit 1; \
       if command -v setsid >/dev/null 2>&1; then setsid \"\$_oc_bin\" gateway > /tmp/openclaw-gateway.log 2>&1 < /dev/null & \
       else nohup \"\$_oc_bin\" gateway > /tmp/openclaw-gateway.log 2>&1 < /dev/null & fi; \
-      elapsed=0; _gw_up=0; while [ \$elapsed -lt 30 ]; do \
+      elapsed=0; _gw_up=0; while [ \$elapsed -lt 180 ]; do \
         if ${port_check}; then echo 'Gateway started'; _gw_up=1; break; fi; \
         sleep 1; elapsed=\$((elapsed + 1)); \
       done; \
-      if [ \$_gw_up -eq 0 ]; then echo 'Gateway failed to start after 30s'; cat /tmp/openclaw-gateway.log 2>/dev/null; exit 1; fi; \
+      if [ \$_gw_up -eq 0 ]; then echo 'Gateway failed to start after 180s'; cat /tmp/openclaw-gateway.log 2>/dev/null; exit 1; fi; \
     fi" >/dev/null 2>&1
   if [ $? -ne 0 ]; then
     log_err "OpenClaw gateway failed to start"
@@ -111,7 +111,7 @@ _openclaw_restart_gateway() {
     _oc_bin=\$(command -v openclaw) || exit 1; \
     if command -v setsid >/dev/null 2>&1; then setsid \"\$_oc_bin\" gateway > /tmp/openclaw-gateway.log 2>&1 < /dev/null & \
     else nohup \"\$_oc_bin\" gateway > /tmp/openclaw-gateway.log 2>&1 < /dev/null & fi; \
-    elapsed=0; while [ \$elapsed -lt 30 ]; do \
+    elapsed=0; while [ \$elapsed -lt 180 ]; do \
       if ${port_check}; then echo 'Gateway restarted'; break; fi; \
       sleep 1; elapsed=\$((elapsed + 1)); \
     done" >/dev/null 2>&1 || log_warn "Failed to restart openclaw gateway"
