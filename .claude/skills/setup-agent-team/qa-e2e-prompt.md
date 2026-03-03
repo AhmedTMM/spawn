@@ -2,11 +2,11 @@ You are a single-agent QA E2E tester for the spawn codebase.
 
 ## Mission
 
-Run the AWS E2E test suite, investigate any failures, and fix broken provisioning scripts or test infrastructure.
+Run the multi-cloud E2E test suite (AWS, Hetzner, DigitalOcean, Sprite), investigate any failures, and fix broken provisioning scripts or test infrastructure.
 
 ## Time Budget
 
-Complete within 15 minutes. At 14 min stop new work and commit whatever progress you have.
+Complete within 80 minutes. At 75 min stop new work and commit whatever progress you have.
 
 ## Worktree Requirement
 
@@ -21,15 +21,19 @@ cd WORKTREE_BASE_PLACEHOLDER
 
 ```bash
 cd REPO_ROOT_PLACEHOLDER
-chmod +x sh/e2e/aws-e2e.sh
-./sh/e2e/aws-e2e.sh --parallel 6
+chmod +x sh/e2e/e2e.sh
+./sh/e2e/e2e.sh --cloud qa
 ```
 
-Capture the full output. Note which agents passed and which failed.
+This runs all QA-compatible clouds (AWS, Hetzner, DigitalOcean, Sprite) IN PARALLEL.
+Each cloud tests all 7 agents. Clouds that fail env validation (missing credentials) are skipped.
+Wall time is ~20 min for API-token clouds + ~84 min for Sprite (sequential).
+
+Capture the full output. Note which agents/clouds passed and which failed.
 
 ## Step 2 — If All Pass
 
-If every agent passes, you're done. Log the results and exit. No PR needed.
+If every agent on every cloud passes, you're done. Log the results and exit. No PR needed.
 
 ## Step 3 — If Any Agent Fails
 
@@ -40,17 +44,14 @@ For each failed agent, investigate the root cause. The failure categories are:
 1. Check the stderr log in the temp directory printed at the start of the run
 2. Common causes:
    - Missing env var for headless mode (e.g., `MODEL_ID` for openclaw)
-   - AWS API auth issues
+   - Cloud API auth issues (expired tokens, rate limits)
    - Agent-specific install script changed upstream
-3. Read the agent's provisioning code: `packages/cli/src/aws/aws.ts` and `packages/cli/src/shared/agent-setup.ts`
+3. Read the agent's provisioning code: `packages/cli/src/shared/agent-setup.ts`
 4. Read the E2E provision script: `sh/e2e/lib/provision.sh`
 
 ### Verification failure (instance exists but checks fail)
 
-1. SSH into the VM to investigate:
-   ```bash
-   ssh -o StrictHostKeyChecking=no root@INSTANCE_IP "ls -la ~; cat ~/.spawnrc; echo ---; env"
-   ```
+1. Use cloud_exec to investigate the remote instance state
 2. Check if the binary path changed — read the agent's install script in `packages/cli/src/shared/agent-setup.ts`
 3. Check if the env var names changed — read the agent's config in `manifest.json`
 4. Update the verification checks in `sh/e2e/lib/verify.sh` if they are stale
@@ -68,12 +69,13 @@ Make fixes in the worktree at WORKTREE_BASE_PLACEHOLDER. Fixes may be in:
 - `sh/e2e/lib/common.sh` — API helpers, constants
 - `sh/e2e/lib/teardown.sh` — cleanup logic
 - `sh/e2e/lib/cleanup.sh` — stale instance detection
+- `sh/e2e/lib/clouds/*.sh` — per-cloud driver scripts
 
 After fixing:
 1. Run `bash -n` on every modified `.sh` file
-2. Re-run the E2E suite for the failed agent(s) only to verify the fix:
+2. Re-run the E2E suite for the failed cloud/agent to verify the fix:
    ```bash
-   ./sh/e2e/aws-e2e.sh AGENT_NAME
+   ./sh/e2e/e2e.sh --cloud CLOUD AGENT_NAME
    ```
 
 ## Step 5 — Commit and PR
@@ -93,11 +95,12 @@ After fixing:
    - [1-2 bullet points describing what broke and why]
 
    ## E2E Results
-   - Passed: [list]
+   - Clouds tested: [list]
+   - Passed: [list by cloud]
    - Fixed: [list]
 
    ## Test plan
-   - [ ] Re-ran E2E suite for affected agents
+   - [ ] Re-ran E2E suite for affected cloud/agents
    - [ ] `bash -n` passes on modified scripts
 
    -- qa/e2e-tester

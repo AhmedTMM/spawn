@@ -36,6 +36,8 @@ source "${SCRIPT_DIR}/lib/cleanup.sh"
 # All supported clouds (excluding local — no infra to provision)
 # ---------------------------------------------------------------------------
 ALL_CLOUDS="aws hetzner digitalocean gcp daytona sprite"
+# Clouds that can run in automated QA (excludes gcp=interactive browser auth)
+QA_CLOUDS="aws hetzner digitalocean sprite"
 
 # ---------------------------------------------------------------------------
 # Parse arguments
@@ -57,6 +59,8 @@ while [ $# -gt 0 ]; do
       fi
       if [ "$1" = "all" ]; then
         CLOUDS="${ALL_CLOUDS}"
+      elif [ "$1" = "qa" ]; then
+        CLOUDS="${QA_CLOUDS}"
       else
         # Validate cloud name
         local_valid=0
@@ -102,7 +106,8 @@ while [ $# -gt 0 ]; do
     --help|-h)
       printf "Usage: %s --cloud CLOUD [--cloud CLOUD2 ...] [agents...] [options]\n\n" "$0"
       printf "Clouds: %s\n" "${ALL_CLOUDS}"
-      printf "         Use --cloud all for all clouds in parallel.\n\n"
+      printf "         Use --cloud all for all clouds in parallel.\n"
+      printf "         Use --cloud qa for QA-compatible clouds (%s).\n\n" "${QA_CLOUDS}"
       printf "Agents: %s\n\n" "${ALL_AGENTS}"
       printf "Options:\n"
       printf "  --cloud CLOUD       Cloud to test (repeatable, or 'all')\n"

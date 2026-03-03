@@ -27,7 +27,7 @@ if [[ "${SPAWN_REASON}" == "e2e" ]]; then
     RUN_MODE="e2e"
     WORKTREE_BASE="/tmp/spawn-worktrees/qa-e2e"
     TEAM_NAME="spawn-qa-e2e"
-    CYCLE_TIMEOUT=1200  # 20 min for E2E tests + investigation
+    CYCLE_TIMEOUT=5400  # 90 min for multi-cloud E2E (Sprite is sequential ~84 min)
 elif [[ "${SPAWN_REASON}" == "issues" ]] && [[ -n "${SPAWN_ISSUE}" ]]; then
     RUN_MODE="issue"
     ISSUE_NUM="${SPAWN_ISSUE}"
@@ -183,8 +183,8 @@ done
 
 log "Pre-cycle cleanup done."
 
-# --- Load cloud credentials (quality + fixtures modes) ---
-if [[ "${RUN_MODE}" == "fixtures" ]] || [[ "${RUN_MODE}" == "quality" ]]; then
+# --- Load cloud credentials (quality, fixtures, and e2e modes) ---
+if [[ "${RUN_MODE}" == "fixtures" ]] || [[ "${RUN_MODE}" == "quality" ]] || [[ "${RUN_MODE}" == "e2e" ]]; then
     if [[ -f "${REPO_ROOT}/sh/shared/key-request.sh" ]]; then
         source "${REPO_ROOT}/sh/shared/key-request.sh"
         load_cloud_keys_from_config
