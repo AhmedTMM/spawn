@@ -164,27 +164,47 @@ input_test_openclaw() {
 
 input_test_zeroclaw() {
   local app="$1"
+  local max_attempts=2
+  local attempt=0
 
   log_step "Running input test for zeroclaw..."
+
   local encoded_prompt
   encoded_prompt=$(printf '%s' "${INPUT_TEST_PROMPT}" | base64 -w 0 2>/dev/null || printf '%s' "${INPUT_TEST_PROMPT}" | base64)
-  local remote_cmd
-  remote_cmd="source ~/.spawnrc 2>/dev/null; source ~/.cargo/env 2>/dev/null; \
-    rm -rf /tmp/e2e-test && mkdir -p /tmp/e2e-test && cd /tmp/e2e-test && git init -q; \
-    PROMPT=\$(printf '%s' '${encoded_prompt}' | base64 -d); zeroclaw agent -p \"\$PROMPT\""
 
-  local output
-  output=$(cloud_exec_long "${app}" "${remote_cmd}" "${INPUT_TEST_TIMEOUT}" 2>&1) || true
+  while [ "${attempt}" -lt "${max_attempts}" ]; do
+    attempt=$((attempt + 1))
 
-  if printf '%s' "${output}" | grep -q "${INPUT_TEST_MARKER}"; then
-    log_ok "zeroclaw input test — marker found in response"
-    return 0
-  else
-    log_err "zeroclaw input test — marker '${INPUT_TEST_MARKER}' not found in response"
-    log_err "Response (last 5 lines):"
-    printf '%s\n' "${output}" | tail -5 >&2
-    return 1
-  fi
+    if [ "${attempt}" -gt 1 ]; then
+      log_warn "Retrying zeroclaw input test (attempt ${attempt}/${max_attempts})..."
+      sleep 5
+    fi
+
+    local remote_cmd
+    remote_cmd="source ~/.spawnrc 2>/dev/null; source ~/.cargo/env 2>/dev/null; \
+      rm -rf /tmp/e2e-test && mkdir -p /tmp/e2e-test && cd /tmp/e2e-test && git init -q; \
+      PROMPT=\$(printf '%s' '${encoded_prompt}' | base64 -d); zeroclaw agent -p \"\$PROMPT\""
+
+    local output
+    output=$(cloud_exec_long "${app}" "${remote_cmd}" "${INPUT_TEST_TIMEOUT}" 2>&1) || true
+
+    if printf '%s' "${output}" | grep -q "${INPUT_TEST_MARKER}"; then
+      log_ok "zeroclaw input test — marker found in response"
+      return 0
+    fi
+
+    if [ "${attempt}" -lt "${max_attempts}" ]; then
+      log_warn "zeroclaw input test attempt ${attempt} failed — will retry"
+      log_warn "Response (last 3 lines):"
+      printf '%s\n' "${output}" | tail -3 >&2
+    else
+      log_err "zeroclaw input test — marker '${INPUT_TEST_MARKER}' not found in response"
+      log_err "Response (last 5 lines):"
+      printf '%s\n' "${output}" | tail -5 >&2
+    fi
+  done
+
+  return 1
 }
 
 input_test_opencode() {

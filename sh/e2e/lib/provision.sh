@@ -149,8 +149,16 @@ CLOUD_ENV
     printf 'export OPENROUTER_API_KEY=%q\n' "${api_key}"
   } > "${env_tmp}"
 
-  # Add agent-specific env vars
+  # Add agent-specific env vars (mirror manifest.json agent env definitions)
   case "${agent}" in
+    claude)
+      env_lines="${env_lines}
+export ANTHROPIC_BASE_URL='https://openrouter.ai/api'
+export ANTHROPIC_AUTH_TOKEN='${api_key}'
+export ANTHROPIC_API_KEY=''
+export CLAUDE_CODE_SKIP_ONBOARDING='1'
+export CLAUDE_CODE_ENABLE_TELEMETRY='0'"
+      ;;
     openclaw)
       {
         printf 'export ANTHROPIC_API_KEY=%q\n' "${api_key}"
@@ -163,6 +171,21 @@ CLOUD_ENV
         printf 'export OPENAI_API_KEY=%q\n' "${api_key}"
         printf 'export OPENAI_BASE_URL=%q\n' "https://openrouter.ai/api/v1"
       } >> "${env_tmp}"
+      ;;
+    codex)
+      env_lines="${env_lines}
+export OPENAI_API_KEY='${api_key}'
+export OPENAI_BASE_URL='https://openrouter.ai/api/v1'"
+      ;;
+    hermes)
+      env_lines="${env_lines}
+export OPENAI_API_KEY='${api_key}'
+export OPENAI_BASE_URL='https://openrouter.ai/api/v1'"
+      ;;
+    kilocode)
+      env_lines="${env_lines}
+export KILO_PROVIDER_TYPE='openrouter'
+export KILO_OPEN_ROUTER_API_KEY='${api_key}'"
       ;;
   esac
 
@@ -179,5 +202,19 @@ CLOUD_ENV
   else
     log_err "Failed to create manual .spawnrc"
   fi
+
+  # Cloud-init may still be installing the agent binary — poll for up to 120s
+  log_step "Waiting for agent binary install to complete (up to 120s)..."
+  local binary_waited=0
+  while [ "${binary_waited}" -lt 120 ]; do
+    if cloud_exec "${app_name}" "command -v ${agent} 2>/dev/null || \
+      PATH=\$HOME/.local/bin:\$HOME/.bun/bin:\$HOME/.npm-global/bin:\$HOME/.cargo/bin:\$HOME/.claude/local/bin:\$HOME/.opencode/bin:\$PATH command -v ${agent}" >/dev/null 2>&1; then
+      log_ok "Agent binary '${agent}' found"
+      return 0
+    fi
+    sleep 10
+    binary_waited=$((binary_waited + 10))
+  done
+  log_warn "Agent binary '${agent}' not found after 120s — proceeding anyway"
   return 0
 }
