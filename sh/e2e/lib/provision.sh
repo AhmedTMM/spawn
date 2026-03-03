@@ -138,30 +138,43 @@ CLOUD_ENV
     return 0
   fi
 
-  # Build env lines from manifest agent config (agent-specific vars)
-  local env_lines="# [spawn:env]
-export IS_SANDBOX='1'
-export OPENROUTER_API_KEY='${api_key}'"
+  # Build env lines in a temp file to avoid interpolating api_key into shell
+  # strings directly (prevents command injection if the key contains shell
+  # metacharacters like single quotes, backticks, or dollar signs).
+  local env_tmp
+  env_tmp=$(mktemp)
+  {
+    printf '%s\n' "# [spawn:env]"
+    printf 'export IS_SANDBOX=%q\n' "1"
+    printf 'export OPENROUTER_API_KEY=%q\n' "${api_key}"
+  } > "${env_tmp}"
 
   # Add agent-specific env vars
   case "${agent}" in
     openclaw)
-      env_lines="${env_lines}
-export ANTHROPIC_API_KEY='${api_key}'
-export ANTHROPIC_BASE_URL='https://openrouter.ai/api'"
+      {
+        printf 'export ANTHROPIC_API_KEY=%q\n' "${api_key}"
+        printf 'export ANTHROPIC_BASE_URL=%q\n' "https://openrouter.ai/api"
+      } >> "${env_tmp}"
       ;;
     zeroclaw)
-      env_lines="${env_lines}
-export ZEROCLAW_PROVIDER='openrouter'
-export OPENAI_API_KEY='${api_key}'
-export OPENAI_BASE_URL='https://openrouter.ai/api/v1'"
+      {
+        printf 'export ZEROCLAW_PROVIDER=%q\n' "openrouter"
+        printf 'export OPENAI_API_KEY=%q\n' "${api_key}"
+        printf 'export OPENAI_BASE_URL=%q\n' "https://openrouter.ai/api/v1"
+      } >> "${env_tmp}"
       ;;
   esac
 
   local env_b64
-  env_b64=$(printf '%s\n' "${env_lines}" | base64 | tr -d '\n')
-  if cloud_exec "${app_name}" "printf '%s' '${env_b64}' | base64 -d > ~/.spawnrc && chmod 600 ~/.spawnrc && \
-    grep -q 'source ~/.spawnrc' ~/.bashrc 2>/dev/null || echo '[ -f ~/.spawnrc ] && source ~/.spawnrc' >> ~/.bashrc" >/dev/null 2>&1; then
+  env_b64=$(base64 < "${env_tmp}" | tr -d '\n')
+  rm -f "${env_tmp}"
+
+  # Use double-quoting around env_b64 in the remote command to prevent word
+  # splitting. Base64 output is shell-safe ([A-Za-z0-9+/=]), but quoting is
+  # defensive best practice against any upstream corruption.
+  if cloud_exec "${app_name}" "printf '%s' \"${env_b64}\" | base64 -d > ~/.spawnrc && chmod 600 ~/.spawnrc && \
+    grep -q 'source ~/.spawnrc' ~/.bashrc 2>/dev/null || printf '%s\n' '[ -f ~/.spawnrc ] && source ~/.spawnrc' >> ~/.bashrc" >/dev/null 2>&1; then
     log_ok "Manual .spawnrc created successfully"
   else
     log_err "Failed to create manual .spawnrc"
