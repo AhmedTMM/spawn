@@ -152,12 +152,13 @@ CLOUD_ENV
   # Add agent-specific env vars (mirror manifest.json agent env definitions)
   case "${agent}" in
     claude)
-      env_lines="${env_lines}
-export ANTHROPIC_BASE_URL='https://openrouter.ai/api'
-export ANTHROPIC_AUTH_TOKEN='${api_key}'
-export ANTHROPIC_API_KEY=''
-export CLAUDE_CODE_SKIP_ONBOARDING='1'
-export CLAUDE_CODE_ENABLE_TELEMETRY='0'"
+      {
+        printf 'export ANTHROPIC_BASE_URL=%q\n' "https://openrouter.ai/api"
+        printf 'export ANTHROPIC_AUTH_TOKEN=%q\n' "${api_key}"
+        printf 'export ANTHROPIC_API_KEY=%q\n' ""
+        printf 'export CLAUDE_CODE_SKIP_ONBOARDING=%q\n' "1"
+        printf 'export CLAUDE_CODE_ENABLE_TELEMETRY=%q\n' "0"
+      } >> "${env_tmp}"
       ;;
     openclaw)
       {
@@ -173,19 +174,22 @@ export CLAUDE_CODE_ENABLE_TELEMETRY='0'"
       } >> "${env_tmp}"
       ;;
     codex)
-      env_lines="${env_lines}
-export OPENAI_API_KEY='${api_key}'
-export OPENAI_BASE_URL='https://openrouter.ai/api/v1'"
+      {
+        printf 'export OPENAI_API_KEY=%q\n' "${api_key}"
+        printf 'export OPENAI_BASE_URL=%q\n' "https://openrouter.ai/api/v1"
+      } >> "${env_tmp}"
       ;;
     hermes)
-      env_lines="${env_lines}
-export OPENAI_API_KEY='${api_key}'
-export OPENAI_BASE_URL='https://openrouter.ai/api/v1'"
+      {
+        printf 'export OPENAI_API_KEY=%q\n' "${api_key}"
+        printf 'export OPENAI_BASE_URL=%q\n' "https://openrouter.ai/api/v1"
+      } >> "${env_tmp}"
       ;;
     kilocode)
-      env_lines="${env_lines}
-export KILO_PROVIDER_TYPE='openrouter'
-export KILO_OPEN_ROUTER_API_KEY='${api_key}'"
+      {
+        printf 'export KILO_PROVIDER_TYPE=%q\n' "openrouter"
+        printf 'export KILO_OPEN_ROUTER_API_KEY=%q\n' "${api_key}"
+      } >> "${env_tmp}"
       ;;
   esac
 
