@@ -304,7 +304,7 @@ export async function startGateway(runner: CloudRunner): Promise<void> {
   // Debian/Ubuntu bash is compiled WITHOUT /dev/tcp support, so we must not rely on it.
   const portCheck =
     'ss -tln 2>/dev/null | grep -q ":18789 " || ' +
-    '(echo >/dev/tcp/127.0.0.1/18789) 2>/dev/null || ' +
+    "(echo >/dev/tcp/127.0.0.1/18789) 2>/dev/null || " +
     "nc -z 127.0.0.1 18789 2>/dev/null";
   const script =
     "source ~/.spawnrc 2>/dev/null; " +
