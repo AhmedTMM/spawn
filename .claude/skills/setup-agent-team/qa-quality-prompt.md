@@ -122,17 +122,18 @@ cd REPO_ROOT_PLACEHOLDER && git worktree remove WORKTREE_BASE_PLACEHOLDER/TASK_N
 
 ### Teammate 4: e2e-tester (model=sonnet)
 
-**Task**: Run the multi-cloud E2E test suite (AWS, Hetzner, DigitalOcean), investigate failures, and fix broken test infrastructure.
+**Task**: Run the E2E test suite on all available clouds (auto-detected), investigate failures, and fix broken test infrastructure.
 
 **Protocol**:
 1. Run the E2E suite from the main repo checkout (E2E tests provision live VMs — no worktree needed for the test runner itself):
    ```bash
    cd REPO_ROOT_PLACEHOLDER
    chmod +x sh/e2e/e2e.sh
-   ./sh/e2e/e2e.sh --cloud aws --cloud hetzner --cloud digitalocean
+   ./sh/e2e/e2e.sh --cloud auto
    ```
-   This runs all 3 clouds IN PARALLEL (each cloud tests all 7 agents). Wall time is ~20 min.
-   If a cloud fails env validation (missing credentials), it's skipped — the other clouds still run.
+   This auto-detects which clouds have valid credentials and runs them all IN PARALLEL.
+   Each cloud tests all 7 agents. Clouds without valid credentials are skipped automatically.
+   Wall time depends on which clouds are available (~20 min for API-token clouds, longer with Sprite).
 2. Capture the full output. Note which agents/clouds passed and which failed.
 3. If all agents on all clouds pass: report results and you're done. No PR needed.
 4. If any agent fails, investigate the root cause. Failure categories:

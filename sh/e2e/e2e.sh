@@ -6,6 +6,7 @@
 #   e2e.sh --cloud hetzner claude codex         # Hetzner, specific agents
 #   e2e.sh --cloud aws --cloud hetzner          # Both clouds IN PARALLEL
 #   e2e.sh --cloud all                          # ALL clouds IN PARALLEL
+#   e2e.sh --cloud auto                         # Auto-detect clouds with valid credentials
 #   e2e.sh --cloud all --parallel 3             # All clouds, 3 agents parallel per cloud
 #   e2e.sh --cloud aws --skip-input-test        # Skip live input tests
 #   e2e.sh --cloud aws --sequential             # Force sequential agents (no parallelism)
@@ -36,8 +37,6 @@ source "${SCRIPT_DIR}/lib/cleanup.sh"
 # All supported clouds (excluding local — no infra to provision)
 # ---------------------------------------------------------------------------
 ALL_CLOUDS="aws hetzner digitalocean gcp daytona sprite"
-# Clouds that can run in automated QA (excludes gcp=interactive browser auth)
-QA_CLOUDS="aws hetzner digitalocean sprite"
 
 # ---------------------------------------------------------------------------
 # Parse arguments
@@ -59,8 +58,8 @@ while [ $# -gt 0 ]; do
       fi
       if [ "$1" = "all" ]; then
         CLOUDS="${ALL_CLOUDS}"
-      elif [ "$1" = "qa" ]; then
-        CLOUDS="${QA_CLOUDS}"
+      elif [ "$1" = "auto" ]; then
+        CLOUDS="__AUTO_DETECT__"
       else
         # Validate cloud name
         local_valid=0
@@ -107,10 +106,10 @@ while [ $# -gt 0 ]; do
       printf "Usage: %s --cloud CLOUD [--cloud CLOUD2 ...] [agents...] [options]\n\n" "$0"
       printf "Clouds: %s\n" "${ALL_CLOUDS}"
       printf "         Use --cloud all for all clouds in parallel.\n"
-      printf "         Use --cloud qa for QA-compatible clouds (%s).\n\n" "${QA_CLOUDS}"
+      printf "         Use --cloud auto to auto-detect clouds with valid credentials.\n\n"
       printf "Agents: %s\n\n" "${ALL_AGENTS}"
       printf "Options:\n"
-      printf "  --cloud CLOUD       Cloud to test (repeatable, or 'all')\n"
+      printf "  --cloud CLOUD       Cloud to test (repeatable, or 'all' / 'auto')\n"
       printf "  --parallel N        Run N agents in parallel per cloud (default: all at once)\n"
       printf "  --sequential        Force sequential agent execution\n"
       printf "  --skip-cleanup      Skip stale e2e-* instance cleanup\n"
@@ -150,6 +149,48 @@ if [ -z "${CLOUDS}" ]; then
   printf "Error: --cloud is required. Use --cloud aws, --cloud all, etc.\n" >&2
   printf "Run %s --help for usage.\n" "$0" >&2
   exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Auto-detect: probe each cloud's validate_env and keep those with credentials
+# ---------------------------------------------------------------------------
+if [ "${CLOUDS}" = "__AUTO_DETECT__" ]; then
+  log_info "Auto-detecting clouds with valid credentials..."
+
+  # Validate common env first (bun, jq, OPENROUTER_API_KEY)
+  if ! require_common_env; then
+    log_err "Common environment validation failed — cannot auto-detect clouds"
+    exit 1
+  fi
+
+  CLOUDS=""
+  for _probe_cloud in ${ALL_CLOUDS}; do
+    # Load the driver (sets ACTIVE_CLOUD and sources the driver file)
+    if ! load_cloud_driver "${_probe_cloud}" 2>/dev/null; then
+      log_warn "No driver for ${_probe_cloud} — skipping"
+      continue
+    fi
+
+    # Probe: call the cloud-specific validate_env (suppress error output)
+    if cloud_validate_env 2>/dev/null; then
+      log_ok "Detected: ${_probe_cloud}"
+      if [ -z "${CLOUDS}" ]; then
+        CLOUDS="${_probe_cloud}"
+      else
+        CLOUDS="${CLOUDS} ${_probe_cloud}"
+      fi
+    else
+      log_warn "No credentials for ${_probe_cloud} — skipping"
+    fi
+  done
+  unset _probe_cloud
+
+  if [ -z "${CLOUDS}" ]; then
+    log_err "No clouds detected with valid credentials. Set env vars for at least one cloud."
+    exit 1
+  fi
+
+  log_ok "Auto-detected clouds: ${CLOUDS}"
 fi
 
 # Default to all agents

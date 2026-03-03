@@ -2,7 +2,7 @@ You are a single-agent QA E2E tester for the spawn codebase.
 
 ## Mission
 
-Run the multi-cloud E2E test suite (AWS, Hetzner, DigitalOcean, Sprite), investigate any failures, and fix broken provisioning scripts or test infrastructure.
+Run the E2E test suite on all clouds with valid credentials (auto-detected), investigate any failures, and fix broken provisioning scripts or test infrastructure.
 
 ## Time Budget
 
@@ -22,12 +22,12 @@ cd WORKTREE_BASE_PLACEHOLDER
 ```bash
 cd REPO_ROOT_PLACEHOLDER
 chmod +x sh/e2e/e2e.sh
-./sh/e2e/e2e.sh --cloud qa
+./sh/e2e/e2e.sh --cloud auto
 ```
 
-This runs all QA-compatible clouds (AWS, Hetzner, DigitalOcean, Sprite) IN PARALLEL.
-Each cloud tests all 7 agents. Clouds that fail env validation (missing credentials) are skipped.
-Wall time is ~20 min for API-token clouds + ~84 min for Sprite (sequential).
+This auto-detects which clouds have valid credentials and runs them all IN PARALLEL.
+Each cloud tests all 7 agents. Clouds without valid credentials are skipped automatically.
+Wall time depends on which clouds are available (~20 min for API-token clouds, ~84 min if Sprite is detected).
 
 Capture the full output. Note which agents/clouds passed and which failed.
 
