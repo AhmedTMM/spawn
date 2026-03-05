@@ -752,31 +752,16 @@ export async function promptDoRegion(): Promise<string> {
 
 // ─── Provisioning ────────────────────────────────────────────────────────────
 
-function getCloudInitUserdata(tier: CloudInitTier = "full", agentName?: string): string {
+function getCloudInitUserdata(tier: CloudInitTier = "full"): string {
   const packages = getPackagesForTier(tier);
-  const useDockerImage = !!agentName;
   const lines = [
     "#!/bin/bash",
     "set -e",
     "export HOME=/root",
     "export DEBIAN_FRONTEND=noninteractive",
+    "apt-get update -y",
+    `apt-get install -y --no-install-recommends ${packages.join(" ")}`,
   ];
-  if (useDockerImage) {
-    // The Docker marketplace image ships with:
-    //   1. UFW enabled (required by DO marketplace validation)
-    //   2. An SSH ForceCommand that blocks login with "Please wait while we
-    //      get your droplet ready..." until the image's first-boot script
-    //      removes it (see marketplace-partners/scripts/03-force-ssh-logout.sh)
-    // Our user_data replaces the image's default first-boot script, so we
-    // must undo the SSH block and allow SSH through the firewall ourselves.
-    lines.push(
-      "sed -i '/ForceCommand/d' /etc/ssh/sshd_config || true",
-      "sed -i '/ForceCommand/d' /etc/ssh/sshd_config.d/*.conf 2>/dev/null || true",
-      "ufw allow OpenSSH || true",
-      "systemctl restart ssh || systemctl restart sshd || true",
-    );
-  }
-  lines.push("apt-get update -y", `apt-get install -y --no-install-recommends ${packages.join(" ")}`);
   if (needsNode(tier)) {
     lines.push(`${NODE_INSTALL_CMD} || true`);
   }
@@ -785,20 +770,6 @@ function getCloudInitUserdata(tier: CloudInitTier = "full", agentName?: string):
       "if ! command -v bun >/dev/null 2>&1; then curl --proto '=https' -fsSL https://bun.sh/install | bash; fi",
       "ln -sf $HOME/.bun/bin/bun /usr/local/bin/bun 2>/dev/null || true",
     );
-  }
-  if (agentName) {
-    if (!/^[a-z0-9-]+$/.test(agentName)) {
-      throw new Error(`Invalid agent name: ${agentName}`);
-    }
-    if (useDockerImage) {
-      // Docker is pre-installed on the marketplace image — just pull
-      lines.push(`docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" &`);
-    } else {
-      lines.push(
-        "curl -fsSL https://get.docker.com | sh",
-        `docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" &`,
-      );
-    }
   }
   lines.push(
     'for rc in ~/.bashrc ~/.zshrc; do grep -q ".bun/bin" "$rc" 2>/dev/null || echo \'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"\' >> "$rc"; done',
@@ -835,16 +806,26 @@ export async function createServer(
     .map((k) => (isNumber(k.id) ? k.id : 0))
     .filter((n) => n > 0);
 
-  const body = JSON.stringify({
+  const useDockerImage = !!agentName;
+  const dropletBody: Record<string, unknown> = {
     name,
     region: effectiveRegion,
     size,
     image,
     ssh_keys: sshKeyIds,
-    user_data: getCloudInitUserdata(tier, agentName),
     backups: false,
     monitoring: false,
-  });
+  };
+
+  // Docker marketplace image has its own first-boot process that removes
+  // the SSH ForceCommand and configures UFW. Providing user_data conflicts
+  // with this and prevents SSH from ever becoming accessible.
+  // Setup is done via SSH after boot instead (see waitForDockerReady).
+  if (!useDockerImage) {
+    dropletBody.user_data = getCloudInitUserdata(tier);
+  }
+
+  const body = JSON.stringify(dropletBody);
 
   const createText = await doApi("POST", "/droplets", body);
   const createData = parseJsonObj(createText);
@@ -990,6 +971,63 @@ export async function waitForCloudInit(ip?: string, _maxAttempts = 60): Promise<
   }
   logStepDone();
   logWarn("Cloud-init marker not found, continuing anyway...");
+}
+
+/**
+ * Wait for a Docker marketplace image droplet to become SSH-accessible,
+ * then install base packages and start pulling the agent Docker image.
+ *
+ * Unlike waitForCloudInit(), no user_data is provided to the droplet —
+ * the marketplace image's own first-boot scripts handle SSH/UFW setup.
+ * All package installation and Docker pull happen via SSH after boot.
+ */
+export async function waitForDockerReady(tier: CloudInitTier, agentName: string): Promise<void> {
+  const selectedKeys = await ensureSshKeys();
+  const keyOpts = getSshKeyOpts(selectedKeys);
+
+  // Wait for SSH — marketplace image first-boot removes ForceCommand
+  // and configures UFW before SSH becomes accessible.
+  await sharedWaitForSsh({
+    host: doServerIp,
+    user: "root",
+    maxAttempts: 60,
+    extraSshOpts: keyOpts,
+  });
+
+  // Install base packages via SSH (no cloud-init user_data was provided)
+  const packages = getPackagesForTier(tier);
+  logStep("Installing base packages...");
+  await runServer(
+    `export DEBIAN_FRONTEND=noninteractive && apt-get update -y && apt-get install -y --no-install-recommends ${packages.join(" ")}`,
+  );
+
+  if (needsNode(tier)) {
+    logStep("Installing Node.js...");
+    await runServer(`${NODE_INSTALL_CMD} || true`);
+  }
+
+  if (needsBun(tier)) {
+    logStep("Installing Bun...");
+    await runServer(
+      "if ! command -v bun >/dev/null 2>&1; then curl --proto '=https' -fsSL https://bun.sh/install | bash; fi && " +
+        "ln -sf $HOME/.bun/bin/bun /usr/local/bin/bun 2>/dev/null || true",
+    );
+  }
+
+  // Pull agent Docker image in background (non-blocking).
+  // tryInstallFromDocker() will check if it's ready at install time.
+  if (!/^[a-z0-9-]+$/.test(agentName)) {
+    throw new Error(`Invalid agent name: ${agentName}`);
+  }
+  logStep("Pulling Docker image in background...");
+  await runServer(`nohup docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" > /tmp/docker-pull.log 2>&1 &`);
+
+  // PATH setup
+  await runServer(
+    'for rc in ~/.bashrc ~/.zshrc; do grep -q ".bun/bin" "$rc" 2>/dev/null || echo \'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"\' >> "$rc"; done',
+  );
+
+  logInfo("Server ready");
 }
 
 export async function runServer(cmd: string, timeoutSecs?: number, ip?: string): Promise<void> {
