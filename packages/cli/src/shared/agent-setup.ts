@@ -435,6 +435,10 @@ export async function startGateway(runner: CloudRunner): Promise<void> {
 async function setupZeroclawConfig(runner: CloudRunner, _apiKey: string): Promise<void> {
   logStep("Configuring ZeroClaw for autonomous operation...");
 
+  // Remove any pre-existing config (e.g. from Docker image extraction) before
+  // running onboard, which generates a fresh config with the correct API key.
+  await runner.runServer("rm -f ~/.zeroclaw/config.toml");
+
   // Run onboard first to set up provider/key
   await runner.runServer(
     `source ~/.spawnrc 2>/dev/null; export PATH="$HOME/.cargo/bin:$PATH"; zeroclaw onboard --api-key "\${OPENROUTER_API_KEY}" --provider openrouter`,
