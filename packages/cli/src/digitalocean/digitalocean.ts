@@ -777,7 +777,7 @@ function getCloudInitUserdata(tier: CloudInitTier = "full", agentName?: string):
     }
     lines.push(
       "curl -fsSL https://get.docker.com | sh",
-      `docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" &`,
+      `nohup docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" > /tmp/docker-pull.log 2>&1 &`,
     );
   }
   lines.push(
