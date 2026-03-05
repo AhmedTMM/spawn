@@ -759,9 +759,22 @@ function getCloudInitUserdata(tier: CloudInitTier = "full", agentName?: string):
     "set -e",
     "export HOME=/root",
     "export DEBIAN_FRONTEND=noninteractive",
-    "apt-get update -y",
-    `apt-get install -y --no-install-recommends ${packages.join(" ")}`,
   ];
+
+  if (agentName) {
+    // Install Docker FIRST (uses apt internally), then start image pull in background.
+    // The pull runs in parallel with the remaining apt-get/node/bun installs below.
+    if (!/^[a-z0-9-]+$/.test(agentName)) {
+      throw new Error(`Invalid agent name: ${agentName}`);
+    }
+    lines.push(
+      "curl -fsSL https://get.docker.com | sh",
+      `nohup docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" > /tmp/docker-pull.log 2>&1 &`,
+    );
+  }
+
+  // Install remaining packages (runs in parallel with docker pull above)
+  lines.push("apt-get update -y", `apt-get install -y --no-install-recommends ${packages.join(" ")}`);
   if (needsNode(tier)) {
     lines.push(`${NODE_INSTALL_CMD} || true`);
   }
@@ -769,17 +782,6 @@ function getCloudInitUserdata(tier: CloudInitTier = "full", agentName?: string):
     lines.push(
       "if ! command -v bun >/dev/null 2>&1; then curl --proto '=https' -fsSL https://bun.sh/install | bash; fi",
       "ln -sf $HOME/.bun/bin/bun /usr/local/bin/bun 2>/dev/null || true",
-    );
-  }
-  // Install Docker + pull pre-built agent image in background (non-blocking)
-  if (agentName) {
-    if (!/^[a-z0-9-]+$/.test(agentName)) {
-      throw new Error(`Invalid agent name: ${agentName}`);
-    }
-    lines.push(
-      "# Install Docker + pull agent image (background, non-blocking)",
-      "curl -fsSL https://get.docker.com | sh",
-      `docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" &`,
     );
   }
   lines.push(
@@ -804,9 +806,9 @@ export async function createServer(
     throw new Error("Invalid region");
   }
 
-  logStep(
-    `Creating DigitalOcean droplet '${name}' (size: ${size}, region: ${effectiveRegion}, image: ubuntu-24-04-x64)...`,
-  );
+  const image = "ubuntu-24-04-x64";
+
+  logStep(`Creating DigitalOcean droplet '${name}' (size: ${size}, region: ${effectiveRegion})...`);
 
   // Get all SSH key IDs
   const keysText = await doApi("GET", "/account/keys");
@@ -819,7 +821,7 @@ export async function createServer(
     name,
     region: effectiveRegion,
     size,
-    image: "ubuntu-24-04-x64",
+    image,
     ssh_keys: sshKeyIds,
     user_data: getCloudInitUserdata(tier, agentName),
     backups: false,
