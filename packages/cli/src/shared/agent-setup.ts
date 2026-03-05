@@ -537,13 +537,14 @@ async function tryInstallFromDocker(runner: CloudRunner, agentName: string, dock
   const script = [
     // Bail if Docker isn't installed
     "command -v docker >/dev/null 2>&1 || { echo '==> Docker not installed'; exit 1; }",
-    // Wait for any in-progress docker pull (started during cloud-init)
-    'if pgrep -f "docker pull" >/dev/null 2>&1; then',
-    '  echo "==> Waiting for Docker image pull to complete..."',
-    '  while pgrep -f "docker pull" >/dev/null 2>&1; do sleep 2; done',
-    "fi",
-    // Bail if image hasn't been pulled yet
-    `docker images -q "${dockerImage}" 2>/dev/null | grep -q . || { echo "==> Image ${dockerImage} not found"; exit 1; }`,
+    // Poll for image availability — cloud-init started the pull in the background.
+    // We can't rely on pgrep because the docker CLI exits while dockerd continues pulling.
+    "_elapsed=0; _max=300",
+    `while ! docker images -q "${dockerImage}" 2>/dev/null | grep -q .; do`,
+    `  if [ $_elapsed -ge $_max ]; then echo "==> Timed out waiting for ${dockerImage}"; exit 1; fi`,
+    '  if [ $_elapsed -eq 0 ]; then echo "==> Waiting for Docker image pull to complete..."; fi',
+    "  sleep 5; _elapsed=$((_elapsed + 5))",
+    "done",
     // Create temp container, copy only known agent directories, clean up
     `_cid=$(docker create "${dockerImage}")`,
     'docker cp "$_cid":/root/.claude /root/ 2>/dev/null || true',
@@ -557,7 +558,7 @@ async function tryInstallFromDocker(runner: CloudRunner, agentName: string, dock
   ].join("\n");
 
   try {
-    await runner.runServer(script, 120);
+    await runner.runServer(script, 600);
     logInfo(`${agentName} extracted from Docker image`);
     return true;
   } catch {
