@@ -9,7 +9,7 @@ import {
   promptDoRegion,
   createServer as createDroplet,
   getServerName,
-  waitForDockerReady,
+  waitForCloudInit,
   runServer,
   uploadFile,
   interactiveSession,
@@ -58,8 +58,7 @@ async function main() {
     },
     getServerName,
     async waitForReady() {
-      // Docker marketplace image boots without user_data — setup via SSH
-      await waitForDockerReady(agent.cloudInitTier, agentName);
+      await waitForCloudInit();
     },
     interactiveSession,
     saveLaunchCmd,

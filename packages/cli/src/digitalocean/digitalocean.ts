@@ -752,7 +752,7 @@ export async function promptDoRegion(): Promise<string> {
 
 // ─── Provisioning ────────────────────────────────────────────────────────────
 
-function getCloudInitUserdata(tier: CloudInitTier = "full"): string {
+function getCloudInitUserdata(tier: CloudInitTier = "full", agentName?: string): string {
   const packages = getPackagesForTier(tier);
   const lines = [
     "#!/bin/bash",
@@ -769,6 +769,15 @@ function getCloudInitUserdata(tier: CloudInitTier = "full"): string {
     lines.push(
       "if ! command -v bun >/dev/null 2>&1; then curl --proto '=https' -fsSL https://bun.sh/install | bash; fi",
       "ln -sf $HOME/.bun/bin/bun /usr/local/bin/bun 2>/dev/null || true",
+    );
+  }
+  if (agentName) {
+    if (!/^[a-z0-9-]+$/.test(agentName)) {
+      throw new Error(`Invalid agent name: ${agentName}`);
+    }
+    lines.push(
+      "curl -fsSL https://get.docker.com | sh",
+      `docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" &`,
     );
   }
   lines.push(
@@ -793,11 +802,9 @@ export async function createServer(
     throw new Error("Invalid region");
   }
 
-  // Use the Docker marketplace image when deploying an agent (Docker pre-installed),
-  // plain Ubuntu otherwise.
-  const image = agentName ? "docker-20-04" : "ubuntu-24-04-x64";
+  const image = "ubuntu-24-04-x64";
 
-  logStep(`Creating DigitalOcean droplet '${name}' (size: ${size}, region: ${effectiveRegion}, image: ${image})...`);
+  logStep(`Creating DigitalOcean droplet '${name}' (size: ${size}, region: ${effectiveRegion})...`);
 
   // Get all SSH key IDs
   const keysText = await doApi("GET", "/account/keys");
@@ -806,26 +813,16 @@ export async function createServer(
     .map((k) => (isNumber(k.id) ? k.id : 0))
     .filter((n) => n > 0);
 
-  const useDockerImage = !!agentName;
-  const dropletBody: Record<string, unknown> = {
+  const body = JSON.stringify({
     name,
     region: effectiveRegion,
     size,
     image,
     ssh_keys: sshKeyIds,
+    user_data: getCloudInitUserdata(tier, agentName),
     backups: false,
     monitoring: false,
-  };
-
-  // Docker marketplace image has its own first-boot process that removes
-  // the SSH ForceCommand and configures UFW. Providing user_data conflicts
-  // with this and prevents SSH from ever becoming accessible.
-  // Setup is done via SSH after boot instead (see waitForDockerReady).
-  if (!useDockerImage) {
-    dropletBody.user_data = getCloudInitUserdata(tier);
-  }
-
-  const body = JSON.stringify(dropletBody);
+  });
 
   const createText = await doApi("POST", "/droplets", body);
   const createData = parseJsonObj(createText);
@@ -971,63 +968,6 @@ export async function waitForCloudInit(ip?: string, _maxAttempts = 60): Promise<
   }
   logStepDone();
   logWarn("Cloud-init marker not found, continuing anyway...");
-}
-
-/**
- * Wait for a Docker marketplace image droplet to become SSH-accessible,
- * then install base packages and start pulling the agent Docker image.
- *
- * Unlike waitForCloudInit(), no user_data is provided to the droplet —
- * the marketplace image's own first-boot scripts handle SSH/UFW setup.
- * All package installation and Docker pull happen via SSH after boot.
- */
-export async function waitForDockerReady(tier: CloudInitTier, agentName: string): Promise<void> {
-  const selectedKeys = await ensureSshKeys();
-  const keyOpts = getSshKeyOpts(selectedKeys);
-
-  // Wait for SSH — marketplace image first-boot removes ForceCommand
-  // and configures UFW before SSH becomes accessible.
-  await sharedWaitForSsh({
-    host: doServerIp,
-    user: "root",
-    maxAttempts: 60,
-    extraSshOpts: keyOpts,
-  });
-
-  // Install base packages via SSH (no cloud-init user_data was provided)
-  const packages = getPackagesForTier(tier);
-  logStep("Installing base packages...");
-  await runServer(
-    `export DEBIAN_FRONTEND=noninteractive && apt-get update -y && apt-get install -y --no-install-recommends ${packages.join(" ")}`,
-  );
-
-  if (needsNode(tier)) {
-    logStep("Installing Node.js...");
-    await runServer(`${NODE_INSTALL_CMD} || true`);
-  }
-
-  if (needsBun(tier)) {
-    logStep("Installing Bun...");
-    await runServer(
-      "if ! command -v bun >/dev/null 2>&1; then curl --proto '=https' -fsSL https://bun.sh/install | bash; fi && " +
-        "ln -sf $HOME/.bun/bin/bun /usr/local/bin/bun 2>/dev/null || true",
-    );
-  }
-
-  // Pull agent Docker image in background (non-blocking).
-  // tryInstallFromDocker() will check if it's ready at install time.
-  if (!/^[a-z0-9-]+$/.test(agentName)) {
-    throw new Error(`Invalid agent name: ${agentName}`);
-  }
-  logStep("Pulling Docker image in background...");
-  await runServer(`nohup docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" > /tmp/docker-pull.log 2>&1 &`);
-
-  // PATH setup
-  await runServer(
-    'for rc in ~/.bashrc ~/.zshrc; do grep -q ".bun/bin" "$rc" 2>/dev/null || echo \'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"\' >> "$rc"; done',
-  );
-
-  logInfo("Server ready");
 }
 
 export async function runServer(cmd: string, timeoutSecs?: number, ip?: string): Promise<void> {
