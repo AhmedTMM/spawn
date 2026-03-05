@@ -71,7 +71,7 @@ jobs:
 
       - name: Packer build
         working-directory: packer
-        run: packer build digitalocean.pkr.hcl
+        run: packer build -var-file=build.auto.pkrvars.json digitalocean.pkr.hcl
 
   cleanup:
     needs: [matrix, build]
