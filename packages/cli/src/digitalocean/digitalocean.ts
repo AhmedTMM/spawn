@@ -795,7 +795,7 @@ export async function createServer(
 
   // Use the Docker marketplace image when deploying an agent (Docker pre-installed),
   // plain Ubuntu otherwise.
-  const image = agentName ? "docker-20-04" : "ubuntu-24-04-x64";
+  const image = agentName ? "docker-22-04" : "ubuntu-24-04-x64";
 
   logStep(`Creating DigitalOcean droplet '${name}' (size: ${size}, region: ${effectiveRegion}, image: ${image})...`);
 
