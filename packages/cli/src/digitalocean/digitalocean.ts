@@ -762,12 +762,18 @@ function getCloudInitUserdata(tier: CloudInitTier = "full", agentName?: string):
     "export DEBIAN_FRONTEND=noninteractive",
   ];
   if (useDockerImage) {
-    // The Docker marketplace image has UFW enabled. Our user_data replaces the
-    // image's default first-boot script, so we must configure SSH access ourselves.
+    // The Docker marketplace image ships with:
+    //   1. UFW enabled (required by DO marketplace validation)
+    //   2. An SSH ForceCommand that blocks login with "Please wait while we
+    //      get your droplet ready..." until the image's first-boot script
+    //      removes it (see marketplace-partners/scripts/03-force-ssh-logout.sh)
+    // Our user_data replaces the image's default first-boot script, so we
+    // must undo the SSH block and allow SSH through the firewall ourselves.
     lines.push(
+      "sed -i '/ForceCommand/d' /etc/ssh/sshd_config || true",
+      "sed -i '/ForceCommand/d' /etc/ssh/sshd_config.d/*.conf 2>/dev/null || true",
       "ufw allow OpenSSH || true",
-      "ufw --force enable || true",
-      "systemctl enable ssh && systemctl restart ssh",
+      "systemctl restart ssh || systemctl restart sshd || true",
     );
   }
   lines.push("apt-get update -y", `apt-get install -y --no-install-recommends ${packages.join(" ")}`);
