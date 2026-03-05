@@ -754,14 +754,23 @@ export async function promptDoRegion(): Promise<string> {
 
 function getCloudInitUserdata(tier: CloudInitTier = "full", agentName?: string): string {
   const packages = getPackagesForTier(tier);
+  const useDockerImage = !!agentName;
   const lines = [
     "#!/bin/bash",
     "set -e",
     "export HOME=/root",
     "export DEBIAN_FRONTEND=noninteractive",
-    "apt-get update -y",
-    `apt-get install -y --no-install-recommends ${packages.join(" ")}`,
   ];
+  if (useDockerImage) {
+    // The Docker marketplace image has UFW enabled. Our user_data replaces the
+    // image's default first-boot script, so we must configure SSH access ourselves.
+    lines.push(
+      "ufw allow OpenSSH || true",
+      "ufw --force enable || true",
+      "systemctl enable ssh && systemctl restart ssh",
+    );
+  }
+  lines.push("apt-get update -y", `apt-get install -y --no-install-recommends ${packages.join(" ")}`);
   if (needsNode(tier)) {
     lines.push(`${NODE_INSTALL_CMD} || true`);
   }
@@ -771,13 +780,19 @@ function getCloudInitUserdata(tier: CloudInitTier = "full", agentName?: string):
       "ln -sf $HOME/.bun/bin/bun /usr/local/bin/bun 2>/dev/null || true",
     );
   }
-  // Pull pre-built agent image in background (non-blocking).
-  // Docker is already installed via the marketplace image (docker-20-04).
   if (agentName) {
     if (!/^[a-z0-9-]+$/.test(agentName)) {
       throw new Error(`Invalid agent name: ${agentName}`);
     }
-    lines.push(`docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" &`);
+    if (useDockerImage) {
+      // Docker is pre-installed on the marketplace image — just pull
+      lines.push(`docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" &`);
+    } else {
+      lines.push(
+        "curl -fsSL https://get.docker.com | sh",
+        `docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" &`,
+      );
+    }
   }
   lines.push(
     'for rc in ~/.bashrc ~/.zshrc; do grep -q ".bun/bin" "$rc" 2>/dev/null || echo \'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"\' >> "$rc"; done',
@@ -801,8 +816,8 @@ export async function createServer(
     throw new Error("Invalid region");
   }
 
-  // Use the Docker marketplace image when an agent is specified (Docker pre-installed),
-  // otherwise fall back to the plain Ubuntu image.
+  // Use the Docker marketplace image when deploying an agent (Docker pre-installed),
+  // plain Ubuntu otherwise.
   const image = agentName ? "docker-20-04" : "ubuntu-24-04-x64";
 
   logStep(`Creating DigitalOcean droplet '${name}' (size: ${size}, region: ${effectiveRegion}, image: ${image})...`);
