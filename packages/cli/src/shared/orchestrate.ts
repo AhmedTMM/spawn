@@ -6,6 +6,7 @@ import type { AgentConfig } from "./agents";
 
 import { generateSpawnId, saveSpawnRecord } from "../history.js";
 import { offerGithubAuth, wrapSshCall } from "./agent-setup";
+import { tryTarballInstall } from "./agent-tarball";
 import { generateEnvConfig } from "./agents";
 import { getModelIdInteractive, getOrPromptApiKey } from "./oauth";
 import { logInfo, logStep, logWarn, prepareStdinForHandoff, withRetry } from "./ui";
@@ -101,8 +102,14 @@ export async function runOrchestration(cloud: CloudOrchestrator, agent: AgentCon
 
   const envContent = generateEnvConfig(agent.envVars(apiKey));
 
-  // 8. Install agent
-  await agent.install();
+  // 8. Install agent (try tarball first on cloud VMs)
+  let installedFromTarball = false;
+  if (cloud.cloudName !== "local" && !agent.skipTarball) {
+    installedFromTarball = await tryTarballInstall(cloud.runner, agentName);
+  }
+  if (!installedFromTarball) {
+    await agent.install();
+  }
 
   // 9. Inject environment variables via .spawnrc
   logStep("Setting up environment variables...");
