@@ -75,13 +75,19 @@ jobs:
             sudo HOME=/root bash "packer/scripts/tier-${TIER}.sh"
           fi
 
-          # Run install commands one at a time via jq array indexing
-          # (avoids passing untrusted strings through bash -c interpolation)
+          # TRUST BOUNDARY: packer/agents.json is version-controlled and requires
+          # PR review to modify. Install commands are executed via bash -c, so any
+          # change to agents.json MUST be reviewed for command safety.
           echo "==> Installing agent..."
           CMD_COUNT=$(jq -r --arg a "${AGENT_NAME}" '.[$a].install | length' packer/agents.json)
           i=0
           while [ "$i" -lt "$CMD_COUNT" ]; do
             cmd=$(jq -r --arg a "${AGENT_NAME}" --argjson i "$i" '.[$a].install[$i]' packer/agents.json)
+            # Basic safety: reject commands with suspicious patterns
+            if printf '%s' "${cmd}" | grep -qE '(mktemp|eval |base64 -d|/dev/tcp|nc -e)'; then
+              echo "::error::Suspicious install command rejected: ${cmd}"
+              exit 1
+            fi
             echo "==> Running: ${cmd}"
             sudo HOME=/root bash -c "${cmd}"
             i=$((i + 1))
