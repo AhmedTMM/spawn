@@ -23,18 +23,13 @@ mock.module("../shared/oauth", () => ({
   getModelIdInteractive: mockGetModelIdInteractive,
 }));
 
-const mockTryTarballInstall = mock(() => Promise.resolve(false));
-
-mock.module("../shared/agent-tarball", () => ({
-  tryTarballInstall: mockTryTarballInstall,
-}));
-
 // ── Import the real module under test ─────────────────────────────────────
 
 const { runOrchestration } = await import("../shared/orchestrate");
-
+import type { CloudOrchestrator, OrchestrationOptions } from "../shared/orchestrate";
 import type { AgentConfig } from "../shared/agents";
-import type { CloudOrchestrator } from "../shared/orchestrate";
+
+const mockTryTarballInstall = mock(() => Promise.resolve(false));
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -72,10 +67,20 @@ function createMockAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
+/** Default options that inject the mock tarball function. */
+const defaultOpts: OrchestrationOptions = {
+  tryTarball: mockTryTarballInstall,
+};
+
 /** Run orchestration and catch the process.exit throw. */
-async function runOrchestrationSafe(cloud: CloudOrchestrator, agent: AgentConfig, agentName: string): Promise<void> {
+async function runOrchestrationSafe(
+  cloud: CloudOrchestrator,
+  agent: AgentConfig,
+  agentName: string,
+  opts: OrchestrationOptions = defaultOpts,
+): Promise<void> {
   try {
-    await runOrchestration(cloud, agent, agentName);
+    await runOrchestration(cloud, agent, agentName, opts);
   } catch (e) {
     // process.exit mock throws to stop execution — that's expected
     if (e instanceof Error && e.message.startsWith("__EXIT_")) {

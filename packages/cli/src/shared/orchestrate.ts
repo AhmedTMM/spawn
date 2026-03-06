@@ -50,7 +50,17 @@ function wrapWithRestartLoop(cmd: string): string {
   ].join("\n");
 }
 
-export async function runOrchestration(cloud: CloudOrchestrator, agent: AgentConfig, agentName: string): Promise<void> {
+/** Options for runOrchestration (used in tests to inject mock dependencies). */
+export interface OrchestrationOptions {
+  tryTarball?: (runner: CloudRunner, agentName: string) => Promise<boolean>;
+}
+
+export async function runOrchestration(
+  cloud: CloudOrchestrator,
+  agent: AgentConfig,
+  agentName: string,
+  options?: OrchestrationOptions,
+): Promise<void> {
   logInfo(`${agent.name} on ${cloud.cloudLabel}`);
   process.stderr.write("\n");
 
@@ -105,7 +115,8 @@ export async function runOrchestration(cloud: CloudOrchestrator, agent: AgentCon
   // 8. Install agent (try tarball first on cloud VMs)
   let installedFromTarball = false;
   if (cloud.cloudName !== "local" && !agent.skipTarball) {
-    installedFromTarball = await tryTarballInstall(cloud.runner, agentName);
+    const tarball = options?.tryTarball ?? tryTarballInstall;
+    installedFromTarball = await tarball(cloud.runner, agentName);
   }
   if (!installedFromTarball) {
     await agent.install();
