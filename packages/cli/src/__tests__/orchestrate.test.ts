@@ -26,8 +26,9 @@ mock.module("../shared/oauth", () => ({
 // ── Import the real module under test ─────────────────────────────────────
 
 const { runOrchestration } = await import("../shared/orchestrate");
-import type { CloudOrchestrator, OrchestrationOptions } from "../shared/orchestrate";
+
 import type { AgentConfig } from "../shared/agents";
+import type { CloudOrchestrator, OrchestrationOptions } from "../shared/orchestrate";
 
 const mockTryTarballInstall = mock(() => Promise.resolve(false));
 

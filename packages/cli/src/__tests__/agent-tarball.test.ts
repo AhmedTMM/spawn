@@ -9,7 +9,7 @@
  * - Rejects URLs with shell injection characters
  */
 
-import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 
 // Suppress stderr (logStep/logWarn) with a spy in beforeEach.
 
