@@ -56,26 +56,30 @@ describe("Icon Integrity", () => {
       });
 
       it(`${id}.png is actual PNG data`, () => {
-        if (!existsSync(pngPath)) {
-          return;
-        }
+        expect(existsSync(pngPath)).toBe(true);
         expect(isPng(pngPath)).toBe(true);
       });
 
       it(`${id} manifest icon URL ends with .png`, () => {
         const parsed = v.safeParse(IconEntry, manifest.agents[id]);
-        if (parsed.success) {
-          expect(parsed.output.icon).toEndWith(`${id}.png`);
+        expect(parsed.success).toBe(true);
+        if (!parsed.success) {
+          return;
         }
+        expect(parsed.output.icon).toEndWith(`${id}.png`);
       });
 
       it(`${id} .sources.json ext is "png"`, () => {
-        if (id in AGENT_SOURCES) {
-          const parsed = v.safeParse(SourceEntry, AGENT_SOURCES[id]);
-          if (parsed.success) {
-            expect(parsed.output.ext).toBe("png");
-          }
+        expect(id in AGENT_SOURCES).toBe(true);
+        if (!(id in AGENT_SOURCES)) {
+          return;
         }
+        const parsed = v.safeParse(SourceEntry, AGENT_SOURCES[id]);
+        expect(parsed.success).toBe(true);
+        if (!parsed.success) {
+          return;
+        }
+        expect(parsed.output.ext).toBe("png");
       });
     }
 
@@ -100,9 +104,7 @@ describe("Icon Integrity", () => {
       });
 
       it(`${id}.png is actual PNG data`, () => {
-        if (!existsSync(pngPath)) {
-          return;
-        }
+        expect(existsSync(pngPath)).toBe(true);
         expect(isPng(pngPath)).toBe(true);
       });
 
@@ -111,12 +113,16 @@ describe("Icon Integrity", () => {
       });
 
       it(`${id} .sources.json ext is "png"`, () => {
-        if (id in CLOUD_SOURCES) {
-          const src = v.safeParse(SourceEntry, CLOUD_SOURCES[id]);
-          if (src.success) {
-            expect(src.output.ext).toBe("png");
-          }
+        expect(id in CLOUD_SOURCES).toBe(true);
+        if (!(id in CLOUD_SOURCES)) {
+          return;
         }
+        const src = v.safeParse(SourceEntry, CLOUD_SOURCES[id]);
+        expect(src.success).toBe(true);
+        if (!src.success) {
+          return;
+        }
+        expect(src.output.ext).toBe("png");
       });
     }
 
