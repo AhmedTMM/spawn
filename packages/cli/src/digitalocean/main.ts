@@ -66,14 +66,7 @@ async function main() {
       if (snapshotId) {
         cloud.skipAgentInstall = true;
       }
-      await createDroplet(
-        name,
-        agent.cloudInitTier,
-        dropletSize,
-        region,
-        agent.slowInstall ? agentName : undefined,
-        snapshotId ?? undefined,
-      );
+      await createDroplet(name, agent.cloudInitTier, dropletSize, region, snapshotId ?? undefined);
     },
     getServerName,
     async waitForReady() {
