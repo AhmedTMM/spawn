@@ -14,8 +14,13 @@ import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from "bun:te
 // NOTE: We do NOT mock ../shared/ui here because Bun's mock.module is
 // process-global and would bleed into orchestrate.test.ts (which needs the
 // real Ok/Err exports). Instead we suppress stderr with a spy in beforeEach.
+//
+// Import via URL to bypass mock.module("../shared/agent-tarball", ...) set
+// by orchestrate.test.ts — Bun's mock.module matches on specifier strings,
+// so a URL import resolves to the real module.
 
-const { tryTarballInstall } = await import("../shared/agent-tarball");
+const agentTarballUrl = new URL("../shared/agent-tarball.ts", import.meta.url).href;
+const { tryTarballInstall } = await import(agentTarballUrl);
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
