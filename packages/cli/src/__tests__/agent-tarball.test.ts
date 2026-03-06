@@ -39,38 +39,51 @@ const RELEASE_PAYLOAD = {
 // ── Tests ────────────────────────────────────────────────────────────────
 
 describe("tryTarballInstall", () => {
-  let originalFetch: typeof global.fetch;
   let stderrSpy: ReturnType<typeof spyOn>;
-  let capturedFetchUrl: string;
 
   beforeEach(() => {
-    capturedFetchUrl = "";
-    originalFetch = global.fetch;
     stderrSpy = spyOn(process.stderr, "write").mockImplementation(() => true);
   });
 
   afterEach(() => {
-    global.fetch = originalFetch;
     stderrSpy.mockRestore();
   });
 
-  it("queries correct GitHub Release tag", async () => {
-    global.fetch = mock(async (url: string | URL | Request) => {
-      capturedFetchUrl = String(url);
-      return new Response(JSON.stringify(RELEASE_PAYLOAD));
+  /** Create a mock fetch that returns the given response. */
+  function mockFetch(response: Response): typeof fetch {
+    return mock(async () => response);
+  }
+
+  /** Create a mock fetch that captures the URL and returns the given response. */
+  function mockFetchCapture(response: Response): {
+    fetchFn: typeof fetch;
+    getUrl: () => string;
+  } {
+    let url = "";
+    const fetchFn: typeof fetch = mock(async (input: string | URL | Request) => {
+      url = String(input);
+      return response;
     });
+    return {
+      fetchFn,
+      getUrl: () => url,
+    };
+  }
+
+  it("queries correct GitHub Release tag", async () => {
+    const { fetchFn, getUrl } = mockFetchCapture(new Response(JSON.stringify(RELEASE_PAYLOAD)));
     const runner = createMockRunner();
 
-    await tryTarballInstall(runner, "openclaw");
+    await tryTarballInstall(runner, "openclaw", fetchFn);
 
-    expect(capturedFetchUrl).toContain("/releases/tags/agent-openclaw-latest");
+    expect(getUrl()).toContain("/releases/tags/agent-openclaw-latest");
   });
 
   it("runs curl | tar xz -C / on the remote VM", async () => {
-    global.fetch = mock(async () => new Response(JSON.stringify(RELEASE_PAYLOAD)));
+    const fetchFn = mockFetch(new Response(JSON.stringify(RELEASE_PAYLOAD)));
     const runner = createMockRunner();
 
-    const result = await tryTarballInstall(runner, "openclaw");
+    const result = await tryTarballInstall(runner, "openclaw", fetchFn);
 
     expect(result).toBe(true);
     expect(runner.runServer).toHaveBeenCalledTimes(1);
@@ -81,26 +94,25 @@ describe("tryTarballInstall", () => {
   });
 
   it("returns false when release does not exist (404)", async () => {
-    global.fetch = mock(
-      async () =>
-        new Response("Not Found", {
-          status: 404,
-        }),
+    const fetchFn = mockFetch(
+      new Response("Not Found", {
+        status: 404,
+      }),
     );
     const runner = createMockRunner();
 
-    const result = await tryTarballInstall(runner, "nonexistent");
+    const result = await tryTarballInstall(runner, "nonexistent", fetchFn);
 
     expect(result).toBe(false);
     expect(runner.runServer).not.toHaveBeenCalled();
   });
 
   it("returns false when runner.runServer throws", async () => {
-    global.fetch = mock(async () => new Response(JSON.stringify(RELEASE_PAYLOAD)));
+    const fetchFn = mockFetch(new Response(JSON.stringify(RELEASE_PAYLOAD)));
     const runner = createMockRunner();
     runner.runServer.mockImplementation(() => Promise.reject(new Error("SSH connection refused")));
 
-    const result = await tryTarballInstall(runner, "openclaw");
+    const result = await tryTarballInstall(runner, "openclaw", fetchFn);
 
     expect(result).toBe(false);
   });
@@ -114,27 +126,26 @@ describe("tryTarballInstall", () => {
         },
       ],
     };
-    global.fetch = mock(async () => new Response(JSON.stringify(noTarball)));
+    const fetchFn = mockFetch(new Response(JSON.stringify(noTarball)));
     const runner = createMockRunner();
 
-    const result = await tryTarballInstall(runner, "openclaw");
+    const result = await tryTarballInstall(runner, "openclaw", fetchFn);
 
     expect(result).toBe(false);
     expect(runner.runServer).not.toHaveBeenCalled();
   });
 
   it("returns false when release response has unexpected format", async () => {
-    global.fetch = mock(
-      async () =>
-        new Response(
-          JSON.stringify({
-            unexpected: true,
-          }),
-        ),
+    const fetchFn = mockFetch(
+      new Response(
+        JSON.stringify({
+          unexpected: true,
+        }),
+      ),
     );
     const runner = createMockRunner();
 
-    const result = await tryTarballInstall(runner, "openclaw");
+    const result = await tryTarballInstall(runner, "openclaw", fetchFn);
 
     expect(result).toBe(false);
   });
@@ -148,10 +159,10 @@ describe("tryTarballInstall", () => {
         },
       ],
     };
-    global.fetch = mock(async () => new Response(JSON.stringify(malicious)));
+    const fetchFn = mockFetch(new Response(JSON.stringify(malicious)));
     const runner = createMockRunner();
 
-    const result = await tryTarballInstall(runner, "openclaw");
+    const result = await tryTarballInstall(runner, "openclaw", fetchFn);
 
     expect(result).toBe(false);
     expect(runner.runServer).not.toHaveBeenCalled();

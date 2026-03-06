@@ -22,14 +22,19 @@ const ReleaseSchema = v.object({
 /**
  * Try to install an agent from a pre-built tarball on GitHub Releases.
  * Returns `true` on success, `false` on any failure (caller should fall back).
+ * @param fetchFn - Optional fetch override (used by tests).
  */
-export async function tryTarballInstall(runner: CloudRunner, agentName: string): Promise<boolean> {
+export async function tryTarballInstall(
+  runner: CloudRunner,
+  agentName: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<boolean> {
   const tag = `agent-${agentName}-latest`;
   logStep(`Checking for pre-built tarball (${tag})...`);
 
   try {
     // Query GitHub Releases API for the rolling release tag
-    const resp = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/${tag}`, {
+    const resp = await fetchFn(`https://api.github.com/repos/${REPO}/releases/tags/${tag}`, {
       headers: {
         Accept: "application/vnd.github+json",
       },
