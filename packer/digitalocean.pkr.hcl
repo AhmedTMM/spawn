@@ -106,6 +106,19 @@ build {
     ]
   }
 
+  # DO Marketplace: install all security updates and remove DO droplet agent
+  provisioner "shell" {
+    inline = [
+      "apt-get update -y",
+      "apt-get dist-upgrade -y",
+      "apt-get purge -y droplet-agent || true",
+      "rm -rf /opt/digitalocean",
+    ]
+    environment_vars = [
+      "DEBIAN_FRONTEND=noninteractive",
+    ]
+  }
+
   # DO Marketplace cleanup — runs last before snapshot.
   # Based on https://github.com/digitalocean/marketplace-partners/blob/master/scripts/cleanup.sh
   # Clears secrets, history, logs, and machine-id so each launched droplet
