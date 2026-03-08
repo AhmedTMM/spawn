@@ -71,16 +71,19 @@ function getAndValidateCloudChoices(
   };
 }
 
-// Prompt user to select a cloud from the sorted list with type-ahead filtering
+// Prompt user to select a cloud from the sorted list with type-ahead filtering.
+// Pre-selects the first cloud (best match: credentials > featured > CLI > rest)
+// so the user can just press Enter for the recommended choice.
 async function selectCloud(
   manifest: Manifest,
   cloudList: string[],
   hintOverrides: Record<string, string>,
 ): Promise<string> {
   const cloudChoice = await p.autocomplete({
-    message: "Where should your agent run? Pick a cloud (type to filter)",
+    message: "Where should your agent run? Pick a cloud (press Enter for recommended)",
     options: mapToSelectOptions(cloudList, manifest.clouds, hintOverrides),
     placeholder: "Start typing to search...",
+    initialValue: cloudList[0],
   });
   if (p.isCancel(cloudChoice)) {
     handleCancel();
