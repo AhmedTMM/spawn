@@ -222,6 +222,7 @@ async function saveOpenRouterKey(key: string): Promise<void> {
     const configPath = getSpawnCloudConfigPath("openrouter");
     mkdirSync(dirname(configPath), {
       recursive: true,
+      mode: 0o700,
     });
     await Bun.write(
       configPath,
@@ -335,7 +336,7 @@ export async function getOrPromptApiKey(agentSlug?: string, cloudSlug?: string):
     const manualKey = await promptAndValidateApiKey();
     if (manualKey && (await verifyOpenrouterKey(manualKey))) {
       process.env.OPENROUTER_API_KEY = manualKey;
-      saveOpenRouterKey(manualKey);
+      await saveOpenRouterKey(manualKey);
       return manualKey;
     }
   }
