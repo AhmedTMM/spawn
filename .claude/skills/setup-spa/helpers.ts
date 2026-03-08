@@ -1,13 +1,14 @@
 // SPA helpers — pure functions for parsing Claude Code stream events,
 // Slack formatting, state management, and file download/cleanup.
 
-import type { Result } from "@openrouter/spawn-shared";
+import type { Result } from "../../../packages/cli/src/shared/result";
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { Err, isString, Ok, toRecord } from "@openrouter/spawn-shared";
 import { slackifyMarkdown } from "slackify-markdown";
 import * as v from "valibot";
+import { Err, Ok } from "../../../packages/cli/src/shared/result";
+import { isString, toRecord } from "../../../packages/cli/src/shared/type-guards";
 
 // #region State
 
@@ -264,6 +265,13 @@ export function markdownToSlack(text: string): string {
 
 const DOWNLOADS_DIR = "/tmp/spa-downloads";
 
+/** Check if a buffer starts with an HTML doctype or tag (indicates auth redirect, not a real file). */
+export function looksLikeHtml(buf: Buffer): boolean {
+  // Check the first 256 bytes for HTML signatures
+  const head = buf.subarray(0, 256).toString("utf-8").trimStart().toLowerCase();
+  return head.startsWith("<!doctype html") || head.startsWith("<html");
+}
+
 /** Download a Slack-hosted file into a thread-scoped temp dir. */
 export async function downloadSlackFile(
   url: string,
@@ -276,18 +284,44 @@ export async function downloadSlackFile(
       headers: {
         Authorization: `Bearer ${botToken}`,
       },
+      redirect: "follow",
     });
     if (!resp.ok) {
       return Err(new Error(`Failed to download ${filename}: ${resp.status}`));
     }
+
+    // Guard: if Slack returns HTML (auth page) instead of the actual file,
+    // the bot token likely lacks the files:read scope.
+    const contentType = resp.headers.get("content-type") ?? "";
+    if (contentType.includes("text/html")) {
+      return Err(
+        new Error(
+          `Download of ${filename} returned HTML instead of file data (Content-Type: ${contentType}). ` +
+            "The bot token may be missing the files:read OAuth scope.",
+        ),
+      );
+    }
+
+    const buf = await resp.arrayBuffer();
+    const buffer = Buffer.from(buf);
+
+    // Defense-in-depth: even if Content-Type looks fine, check the actual bytes
+    if (looksLikeHtml(buffer)) {
+      return Err(
+        new Error(
+          `Download of ${filename} contains HTML despite Content-Type: ${contentType}. ` +
+            "Slack likely returned an auth redirect page instead of the file.",
+        ),
+      );
+    }
+
     const dir = `${DOWNLOADS_DIR}/${threadTs}`;
     mkdirSync(dir, {
       recursive: true,
     });
     const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
     const localPath = `${dir}/${safeName}`;
-    const buf = await resp.arrayBuffer();
-    writeFileSync(localPath, Buffer.from(buf));
+    writeFileSync(localPath, buffer);
     return Ok(localPath);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

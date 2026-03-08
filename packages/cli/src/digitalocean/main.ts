@@ -9,9 +9,11 @@ import { runOrchestration } from "../shared/orchestrate";
 import { logStep } from "../shared/ui";
 import { agents, resolveAgent } from "./agents";
 import {
+  checkAccountStatus,
   createServer as createDroplet,
   ensureDoToken,
   ensureSshKey,
+  findSpawnSnapshot,
   getServerName,
   interactiveSession,
   promptDoRegion,
@@ -20,6 +22,7 @@ import {
   runServer,
   uploadFile,
   waitForCloudInit,
+  waitForSshOnly,
 } from "./digitalocean";
 
 async function main() {
@@ -34,10 +37,12 @@ async function main() {
 
   let dropletSize = "";
   let region = "";
+  let snapshotId: string | null = null;
 
   const cloud: CloudOrchestrator = {
     cloudName: "digitalocean",
     cloudLabel: "DigitalOcean",
+    skipAgentInstall: false,
     runner: {
       runServer,
       uploadFile,
@@ -51,17 +56,29 @@ async function main() {
         await new Promise((r) => setTimeout(r, 5000));
       }
     },
+    async checkAccountReady() {
+      await checkAccountStatus();
+    },
     async promptSize() {
       dropletSize = await promptDropletSize();
       region = await promptDoRegion();
     },
     async createServer(name: string, spawnId?: string) {
       process.env.SPAWN_ID = spawnId || "";
-      await createDroplet(name, agent.cloudInitTier, dropletSize, region, agent.slowInstall ? agentName : undefined);
+      // Check for a pre-built snapshot before provisioning
+      snapshotId = await findSpawnSnapshot(agentName);
+      if (snapshotId) {
+        cloud.skipAgentInstall = true;
+      }
+      await createDroplet(name, agent.cloudInitTier, dropletSize, region, snapshotId ?? undefined);
     },
     getServerName,
     async waitForReady() {
-      await waitForCloudInit();
+      if (snapshotId) {
+        await waitForSshOnly();
+      } else {
+        await waitForCloudInit();
+      }
     },
     interactiveSession,
     saveLaunchCmd: (cmd: string, sid?: string) => saveLaunchCmd(cmd, sid),
