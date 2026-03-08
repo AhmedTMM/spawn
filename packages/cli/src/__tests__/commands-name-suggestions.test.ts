@@ -60,6 +60,7 @@ const manifestWithDistinctNames = {
     sp: {
       name: "Sprite Cloud",
       description: "Lightweight VMs",
+      price: "test",
       url: "https://sprite.sh",
       type: "vm",
       auth: "token",
@@ -70,6 +71,7 @@ const manifestWithDistinctNames = {
     hz: {
       name: "Hetzner Cloud",
       description: "European cloud provider",
+      price: "test",
       url: "https://hetzner.com",
       type: "cloud",
       auth: "token",
@@ -80,6 +82,7 @@ const manifestWithDistinctNames = {
     dc: {
       name: "DigitalOcean",
       description: "Cloud infrastructure",
+      price: "test",
       url: "https://digitalocean.com",
       type: "cloud",
       auth: "token",
