@@ -36,7 +36,7 @@ export interface CloudOrchestrator {
  * Skipped for local execution where the user controls the process directly.
  */
 export function wrapWithTmux(cmd: string): string {
-  const escaped = cmd.replace(/"/g, '\\"');
+  const escaped = cmd.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\$/g, "\\$").replace(/`/g, "\\`");
   return [
     "tmux attach-session -t spawn 2>/dev/null",
     "|| {",
@@ -142,7 +142,7 @@ export async function runOrchestration(
             `printf '%s' '${envB64}' | base64 -d > ~/.spawnrc && chmod 600 ~/.spawnrc; ` +
               `grep -q 'source ~/.spawnrc' ~/.bashrc 2>/dev/null || echo '[ -f ~/.spawnrc ] && source ~/.spawnrc' >> ~/.bashrc; ` +
               `grep -q 'source ~/.spawnrc' ~/.zshrc 2>/dev/null || echo '[ -f ~/.spawnrc ] && source ~/.spawnrc' >> ~/.zshrc; ` +
-              "command -v tmux >/dev/null 2>&1 || { apt-get install -y -qq tmux 2>/dev/null || sudo apt-get install -y -qq tmux 2>/dev/null; }",
+              "command -v tmux >/dev/null 2>&1 || { sudo apt-get install -y -qq tmux 2>/dev/null || apt-get install -y -qq tmux 2>/dev/null; }",
           ),
         ),
       2,
