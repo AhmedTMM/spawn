@@ -322,7 +322,7 @@ async function installChromeBrowser(runner: CloudRunner): Promise<void> {
   logStep("Installing Google Chrome for browser tool...");
   try {
     await runner.runServer(
-      "command -v google-chrome >/dev/null 2>&1 && { echo 'Chrome already installed'; exit 0; }; " +
+      "{ command -v google-chrome-stable >/dev/null 2>&1 || command -v google-chrome >/dev/null 2>&1; } && { echo 'Chrome already installed'; exit 0; }; " +
         "wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/google-chrome.deb && " +
         "sudo dpkg -i /tmp/google-chrome.deb 2>/dev/null; sudo apt-get install -f -y -qq 2>/dev/null; " +
         "rm -f /tmp/google-chrome.deb",
@@ -357,11 +357,6 @@ async function setupOpenclawConfig(runner: CloudRunner, apiKey: string, modelId:
       "token": ${escapedToken}
     }
   },
-  "browser": {
-    "executablePath": "/usr/bin/google-chrome",
-    "noSandbox": true,
-    "headless": true
-  },
   "agents": {
     "defaults": {
       "model": {
@@ -371,6 +366,19 @@ async function setupOpenclawConfig(runner: CloudRunner, apiKey: string, modelId:
   }
 }`;
   await uploadConfigFile(runner, config, "$HOME/.openclaw/openclaw.json");
+
+  // Configure browser via CLI (openclaw config set) — the supported way to set
+  // browser options. Writing JSON directly may not be picked up by all versions.
+  try {
+    await runner.runServer(
+      "export PATH=$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.local/bin:$PATH; " +
+        "openclaw config set browser.executablePath /usr/bin/google-chrome-stable; " +
+        "openclaw config set browser.noSandbox true; " +
+        "openclaw config set browser.headless true",
+    );
+  } catch {
+    logWarn("Browser config setup failed (non-fatal)");
+  }
 }
 
 export async function startGateway(runner: CloudRunner): Promise<void> {
