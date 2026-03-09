@@ -3,11 +3,11 @@
 # Executable directly via curl|bash; also sourceable using the CDN URL with eval.
 #
 # Usage (via curl|bash — recommended):
-#   curl -fsSL https://openrouter.ai/labs/spawn/shared/github-auth.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/OpenRouterTeam/spawn/main/sh/shared/github-auth.sh | bash
+#   curl -fsSL --proto '=https' https://openrouter.ai/labs/spawn/shared/github-auth.sh | bash
+#   curl -fsSL --proto '=https' https://raw.githubusercontent.com/OpenRouterTeam/spawn/main/sh/shared/github-auth.sh | bash
 #
 # Usage (sourced using absolute path or CDN URL):
-#   eval "$(curl -fsSL https://openrouter.ai/labs/spawn/shared/github-auth.sh)"
+#   eval "$(curl -fsSL --proto '=https' https://openrouter.ai/labs/spawn/shared/github-auth.sh)"
 #   ensure_github_auth
 
 # ============================================================
@@ -311,13 +311,18 @@ ensure_gh_auth() {
         # GITHUB_TOKEN is already unset above so gh auth login won't refuse
         # with "The value of the GITHUB_TOKEN environment variable is being
         # used for authentication."
-        printf '%s\n' "${_gh_token}" | gh auth login --with-token || {
+        gh auth login --with-token <<EOF || {
+${_gh_token}
+EOF
             log_error "Failed to authenticate with GITHUB_TOKEN"
             export GITHUB_TOKEN="${_gh_token}"
             return 1
         }
         # Restrict token file permissions to owner-only (prevents exposure on multi-user systems)
-        chmod 600 "${HOME}/.config/gh/hosts.yml" 2>/dev/null || true
+        chmod 600 "${HOME}/.config/gh/hosts.yml" || {
+            log_error "Failed to restrict token file permissions — aborting to prevent credential exposure"
+            return 1
+        }
         export GITHUB_TOKEN="${_gh_token}"
     elif gh auth status &>/dev/null; then
         log_info "Authenticated with GitHub CLI"

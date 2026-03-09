@@ -1,7 +1,7 @@
 import type { Manifest } from "../manifest";
 
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { preflightCredentialCheck } from "../commands";
+import { preflightCredentialCheck } from "../commands/index.js";
 import { mockClackPrompts } from "./test-helpers";
 
 const mockIsCancel = mock(() => false);
@@ -21,6 +21,7 @@ function makeManifest(cloudAuth: string): Manifest {
       testcloud: {
         name: "Test Cloud",
         description: "A test cloud",
+        price: "test",
         url: "https://test.cloud",
         type: "vps",
         auth: cloudAuth,

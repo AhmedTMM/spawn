@@ -2,7 +2,7 @@
   "claude": {
     "tier": "minimal",
     "install": [
-      "curl -fsSL https://claude.ai/install.sh | bash || mkdir -p ~/.npm-global/bin && npm install -g --prefix ~/.npm-global @anthropic-ai/claude-code"
+      "curl -fsSL https://claude.ai/install.sh | bash || [ -f /root/.local/bin/claude ]"
     ]
   },
   "codex": {
@@ -14,7 +14,8 @@
   "openclaw": {
     "tier": "full",
     "install": [
-      "mkdir -p ~/.npm-global/bin && npm install -g --prefix ~/.npm-global openclaw"
+      "mkdir -p ~/.npm-global/bin && npm install -g --prefix ~/.npm-global openclaw",
+      "curl --proto '=https' -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/google-chrome.deb && apt-get install -y -qq /tmp/google-chrome.deb && rm -f /tmp/google-chrome.deb"
     ]
   },
   "opencode": {

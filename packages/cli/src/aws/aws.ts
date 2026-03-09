@@ -1,11 +1,12 @@
 // aws/aws.ts — Core AWS Lightsail provider: auth, provisioning, SSH execution
 
+import type { VMConnection } from "../history.js";
 import type { CloudInitTier } from "../shared/agents";
 
 import { createHash, createHmac } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import * as v from "valibot";
-import { saveVmConnection } from "../history.js";
+import { handleBillingError, isBillingError, showNonBillingError } from "../shared/billing-guidance";
 import { getPackagesForTier, NODE_INSTALL_CMD, needsBun, needsNode } from "../shared/cloud-init";
 import { parseJsonWith } from "../shared/parse";
 import {
@@ -17,6 +18,7 @@ import {
   spawnInteractive,
 } from "../shared/ssh";
 import { ensureSshKeys, getSshKeyOpts } from "../shared/ssh-keys";
+import { getErrorMessage } from "../shared/type-guards";
 import {
   defaultSpawnName,
   getSpawnCloudConfigPath,
@@ -126,18 +128,18 @@ export const BUNDLES: Bundle[] = [
 export const DEFAULT_BUNDLE = BUNDLES[0]; // nano_3_0
 
 /** Per-agent default bundles — heavier agents need more RAM. */
-export const AGENT_BUNDLE_DEFAULTS: Record<string, string> = {
+const AGENT_BUNDLE_DEFAULTS: Record<string, string> = {
   openclaw: "medium_3_0", // OpenClaw gateway + 713 npm packages needs >=4 GB
 };
 
 // ─── Lightsail Regions ────────────────────────────────────────────────────────
 
-export interface Region {
+interface Region {
   id: string;
   label: string;
 }
 
-export const REGIONS: Region[] = [
+const REGIONS: Region[] = [
   {
     id: "us-east-1",
     label: "us-east-1 (N. Virginia)",
@@ -166,20 +168,34 @@ export const REGIONS: Region[] = [
 
 // ─── State ──────────────────────────────────────────────────────────────────
 
-let awsAccessKeyId = "";
-let awsSecretAccessKey = "";
-let awsSessionToken = "";
-let awsRegion = "us-east-1";
-let lightsailMode: "cli" | "rest" = "cli";
-let instanceName = "";
-let instanceIp = "";
+interface AwsState {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken: string;
+  region: string;
+  lightsailMode: "cli" | "rest";
+  instanceName: string;
+  instanceIp: string;
+  selectedBundle: string;
+}
+
+const _state: AwsState = {
+  accessKeyId: "",
+  secretAccessKey: "",
+  sessionToken: "",
+  region: "us-east-1",
+  lightsailMode: "cli",
+  instanceName: "",
+  instanceIp: "",
+  selectedBundle: DEFAULT_BUNDLE.id,
+};
 
 export function getState() {
   return {
-    awsRegion,
-    lightsailMode,
-    instanceName,
-    instanceIp,
+    awsRegion: _state.region,
+    lightsailMode: _state.lightsailMode,
+    instanceName: _state.instanceName,
+    instanceIp: _state.instanceIp,
   };
 }
 
@@ -256,11 +272,11 @@ async function awsCli(args: string[]): Promise<string> {
 // ─── SigV4 REST API ─────────────────────────────────────────────────────────
 
 async function lightsailRest(target: string, body = "{}"): Promise<string> {
-  if (!awsAccessKeyId || !awsSecretAccessKey) {
+  if (!_state.accessKeyId || !_state.secretAccessKey) {
     throw new Error("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set for REST API calls");
   }
 
-  const region = awsRegion;
+  const region = _state.region;
   const service = "lightsail";
   const host = `lightsail.${region}.amazonaws.com`;
 
@@ -291,14 +307,14 @@ async function lightsailRest(target: string, body = "{}"): Promise<string> {
       "x-amz-date",
       amzDate,
     ],
-    ...(awsSessionToken
+    ...(_state.sessionToken
       ? (() => {
           const tokenHeader: [
             string,
             string,
           ] = [
             "x-amz-security-token",
-            awsSessionToken,
+            _state.sessionToken,
           ];
           return [
             tokenHeader,
@@ -326,13 +342,13 @@ async function lightsailRest(target: string, body = "{}"): Promise<string> {
   const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
   const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${credentialScope}\n${sha256(canonicalRequest)}`;
 
-  const kDate = hmac(`AWS4${awsSecretAccessKey}`, dateStamp);
+  const kDate = hmac(`AWS4${_state.secretAccessKey}`, dateStamp);
   const kRegion = hmac(kDate, region);
   const kService = hmac(kRegion, service);
   const kSigning = hmac(kService, "aws4_request");
   const sig = hmac(kSigning, stringToSign).toString("hex");
 
-  const authHeader = `AWS4-HMAC-SHA256 Credential=${awsAccessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${sig}`;
+  const authHeader = `AWS4-HMAC-SHA256 Credential=${_state.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${sig}`;
 
   const reqHeaders: Record<string, string> = Object.fromEntries(allHeaders.filter(([k]) => k !== "host"));
   reqHeaders["Authorization"] = authHeader;
@@ -492,7 +508,7 @@ export async function authenticate(): Promise<void> {
   if (!validateRegionName(region)) {
     throw new Error(`Invalid AWS region: ${region}. Must match /^[a-zA-Z0-9_-]{1,63}$/`);
   }
-  awsRegion = region;
+  _state.region = region;
   const skipCache = process.env.SPAWN_REAUTH === "1";
 
   // 1. Try existing CLI with valid credentials
@@ -502,7 +518,7 @@ export async function authenticate(): Promise<void> {
       "get-caller-identity",
     ]);
     if (result.exitCode === 0) {
-      lightsailMode = "cli";
+      _state.lightsailMode = "cli";
       process.env.AWS_DEFAULT_REGION = region;
       logInfo(`AWS CLI ready, using region: ${region}`);
       return;
@@ -512,20 +528,20 @@ export async function authenticate(): Promise<void> {
 
   // 2. Check env vars for REST mode
   if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
-    awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
-    awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
-    awsSessionToken = process.env.AWS_SESSION_TOKEN || "";
+    _state.accessKeyId = process.env.AWS_ACCESS_KEY_ID;
+    _state.secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+    _state.sessionToken = process.env.AWS_SESSION_TOKEN || "";
 
     if (hasAwsCli()) {
-      lightsailMode = "cli";
+      _state.lightsailMode = "cli";
       process.env.AWS_DEFAULT_REGION = region;
-      await saveCredsToConfig(awsAccessKeyId, awsSecretAccessKey, region);
+      await saveCredsToConfig(_state.accessKeyId, _state.secretAccessKey, region);
       logInfo(`AWS CLI ready with env credentials, using region: ${region}`);
       return;
     }
 
-    lightsailMode = "rest";
-    await saveCredsToConfig(awsAccessKeyId, awsSecretAccessKey, region);
+    _state.lightsailMode = "rest";
+    await saveCredsToConfig(_state.accessKeyId, _state.secretAccessKey, region);
     logInfo("AWS CLI not available \u2014 using Lightsail REST API directly");
     logInfo(`Using region: ${region}`);
     return;
@@ -542,9 +558,9 @@ export async function authenticate(): Promise<void> {
       process.env.AWS_ACCESS_KEY_ID = cached.accessKeyId;
       process.env.AWS_SECRET_ACCESS_KEY = cached.secretAccessKey;
       process.env.AWS_DEFAULT_REGION = cachedRegion;
-      awsRegion = cachedRegion;
-      awsAccessKeyId = cached.accessKeyId;
-      awsSecretAccessKey = cached.secretAccessKey;
+      _state.region = cachedRegion;
+      _state.accessKeyId = cached.accessKeyId;
+      _state.secretAccessKey = cached.secretAccessKey;
 
       if (hasAwsCli()) {
         const result = awsCliSync([
@@ -552,17 +568,17 @@ export async function authenticate(): Promise<void> {
           "get-caller-identity",
         ]);
         if (result.exitCode === 0) {
-          lightsailMode = "cli";
+          _state.lightsailMode = "cli";
           logInfo(`AWS CLI ready with credentials cached by spawn. Using region: ${cachedRegion}`);
           return;
         }
         logWarn("Credentials cached by spawn are invalid or expired");
-        awsAccessKeyId = "";
-        awsSecretAccessKey = "";
+        _state.accessKeyId = "";
+        _state.secretAccessKey = "";
         delete process.env.AWS_ACCESS_KEY_ID;
         delete process.env.AWS_SECRET_ACCESS_KEY;
       } else {
-        lightsailMode = "rest";
+        _state.lightsailMode = "rest";
         logInfo("Using cached AWS credentials with Lightsail REST API");
         logInfo(`Using region: ${cachedRegion}`);
         return;
@@ -593,8 +609,8 @@ export async function authenticate(): Promise<void> {
   process.env.AWS_ACCESS_KEY_ID = accessKey;
   process.env.AWS_SECRET_ACCESS_KEY = secretKey;
   process.env.AWS_DEFAULT_REGION = region;
-  awsAccessKeyId = accessKey;
-  awsSecretAccessKey = secretKey;
+  _state.accessKeyId = accessKey;
+  _state.secretAccessKey = secretKey;
 
   if (hasAwsCli()) {
     const result = awsCliSync([
@@ -602,14 +618,14 @@ export async function authenticate(): Promise<void> {
       "get-caller-identity",
     ]);
     if (result.exitCode === 0) {
-      lightsailMode = "cli";
+      _state.lightsailMode = "cli";
       await saveCredsToConfig(accessKey, secretKey, region);
       logInfo(`AWS CLI configured, using region: ${region}`);
       return;
     }
   }
 
-  lightsailMode = "rest";
+  _state.lightsailMode = "rest";
   await saveCredsToConfig(accessKey, secretKey, region);
   logInfo("Using Lightsail REST API directly");
   logInfo(`Using region: ${region}`);
@@ -623,7 +639,7 @@ export async function promptRegion(): Promise<void> {
     if (!validateRegionName(envRegion)) {
       throw new Error(`Invalid AWS region: ${envRegion}. Must match /^[a-zA-Z0-9_-]{1,63}$/`);
     }
-    awsRegion = envRegion;
+    _state.region = envRegion;
     return;
   }
   if (process.env.SPAWN_CUSTOM !== "1") {
@@ -636,18 +652,16 @@ export async function promptRegion(): Promise<void> {
   process.stderr.write("\n");
   const items = REGIONS.map((r) => `${r.id}|${r.label}`);
   const selected = await selectFromList(items, "AWS region", "us-east-1");
-  awsRegion = selected;
+  _state.region = selected;
   process.env.AWS_DEFAULT_REGION = selected;
   logInfo(`Using region: ${selected}`);
 }
 
 // ─── Bundle Prompt ──────────────────────────────────────────────────────────
 
-let selectedBundle = DEFAULT_BUNDLE.id;
-
 export async function promptBundle(agentName?: string): Promise<void> {
   if (process.env.LIGHTSAIL_BUNDLE) {
-    selectedBundle = process.env.LIGHTSAIL_BUNDLE;
+    _state.selectedBundle = process.env.LIGHTSAIL_BUNDLE;
     return;
   }
 
@@ -656,14 +670,14 @@ export async function promptBundle(agentName?: string): Promise<void> {
   const defaultId = agentDefault ?? DEFAULT_BUNDLE.id;
 
   if (process.env.SPAWN_NON_INTERACTIVE === "1") {
-    selectedBundle = defaultId;
+    _state.selectedBundle = defaultId;
     return;
   }
 
   process.stderr.write("\n");
   const items = BUNDLES.map((b) => `${b.id}|${b.label}`);
   const selected = await selectFromList(items, "instance size", defaultId);
-  selectedBundle = selected;
+  _state.selectedBundle = selected;
   logInfo(`Using bundle: ${selected}`);
 }
 
@@ -682,7 +696,7 @@ export async function ensureSshKey(): Promise<void> {
   const keyName = "spawn-key";
   const pubKey = readFileSync(pubPath, "utf-8").trim();
 
-  if (lightsailMode === "cli") {
+  if (_state.lightsailMode === "cli") {
     // Check if already registered
     const check = awsCliSync([
       "lightsail",
@@ -814,9 +828,9 @@ function getCloudInitUserdata(tier: CloudInitTier = "full"): string {
 
 // ─── Provisioning ───────────────────────────────────────────────────────────
 
-export async function createInstance(name: string, tier?: CloudInitTier): Promise<void> {
-  const bundle = selectedBundle;
-  const region = awsRegion;
+export async function createInstance(name: string, tier?: CloudInitTier): Promise<VMConnection> {
+  const bundle = _state.selectedBundle;
+  const region = _state.region;
   const az = `${region}a`;
   const blueprint = "ubuntu_24_04";
 
@@ -828,7 +842,7 @@ export async function createInstance(name: string, tier?: CloudInitTier): Promis
 
   const userdata = getCloudInitUserdata(tier);
 
-  if (lightsailMode === "cli") {
+  if (_state.lightsailMode === "cli") {
     try {
       await awsCli([
         "lightsail",
@@ -847,13 +861,42 @@ export async function createInstance(name: string, tier?: CloudInitTier): Promis
         userdata,
       ]);
     } catch (err) {
-      logError("Failed to create Lightsail instance");
-      logWarn("Common issues:");
-      logWarn("  - Lightsail not enabled: visit https://lightsail.aws.amazon.com/ls/webapp/home to activate");
-      logWarn("  - Instance limit reached for your account");
-      logWarn("  - Bundle unavailable in region");
-      logWarn("  - AWS credentials lack Lightsail permissions");
-      logWarn(`  - Instance name '${name}' already in use`);
+      const errMsg = getErrorMessage(err);
+      logError(`Failed to create Lightsail instance: ${errMsg}`);
+
+      if (isBillingError("aws", errMsg)) {
+        const shouldRetry = await handleBillingError("aws");
+        if (shouldRetry) {
+          logStep("Retrying instance creation...");
+          await awsCli([
+            "lightsail",
+            "create-instances",
+            "--instance-names",
+            name,
+            "--availability-zone",
+            az,
+            "--blueprint-id",
+            blueprint,
+            "--bundle-id",
+            bundle,
+            "--key-pair-name",
+            "spawn-key",
+            "--user-data",
+            userdata,
+          ]);
+          _state.instanceName = name;
+          logInfo(`Instance creation initiated: ${name}`);
+          return await waitForInstance();
+        }
+      } else {
+        showNonBillingError("aws", [
+          "Lightsail not enabled: visit https://lightsail.aws.amazon.com/ls/webapp/home to activate",
+          "Instance limit reached for your account",
+          "Bundle unavailable in region",
+          "AWS credentials lack Lightsail permissions",
+          `Instance name '${name}' already in use`,
+        ]);
+      }
       throw err;
     }
   } else {
@@ -872,24 +915,53 @@ export async function createInstance(name: string, tier?: CloudInitTier): Promis
         }),
       );
     } catch (err) {
-      logError("Failed to create Lightsail instance");
-      logWarn("Common issues:");
-      logWarn("  - Lightsail not enabled: visit https://lightsail.aws.amazon.com/ls/webapp/home to activate");
-      logWarn("  - Instance limit reached for your account");
-      logWarn("  - Bundle unavailable in region");
-      logWarn("  - Credentials lack lightsail:CreateInstances permission");
-      logWarn(`  - Instance name '${name}' already in use`);
+      const errMsg = getErrorMessage(err);
+      logError(`Failed to create Lightsail instance: ${errMsg}`);
+
+      if (isBillingError("aws", errMsg)) {
+        const shouldRetry = await handleBillingError("aws");
+        if (shouldRetry) {
+          logStep("Retrying instance creation...");
+          await lightsailRest(
+            "Lightsail_20161128.CreateInstances",
+            JSON.stringify({
+              instanceNames: [
+                name,
+              ],
+              availabilityZone: az,
+              blueprintId: blueprint,
+              bundleId: bundle,
+              keyPairName: "spawn-key",
+              userData: userdata,
+            }),
+          );
+          _state.instanceName = name;
+          logInfo(`Instance creation initiated: ${name}`);
+          return await waitForInstance();
+        }
+      } else {
+        showNonBillingError("aws", [
+          "Lightsail not enabled: visit https://lightsail.aws.amazon.com/ls/webapp/home to activate",
+          "Instance limit reached for your account",
+          "Bundle unavailable in region",
+          "Credentials lack lightsail:CreateInstances permission",
+          `Instance name '${name}' already in use`,
+        ]);
+      }
       throw err;
     }
   }
 
-  instanceName = name;
+  _state.instanceName = name;
   logInfo(`Instance creation initiated: ${name}`);
+
+  // Wait for instance to become running and get IP
+  return await waitForInstance();
 }
 
 // ─── Wait for Instance ──────────────────────────────────────────────────────
 
-export async function waitForInstance(maxAttempts = 60): Promise<void> {
+export async function waitForInstance(maxAttempts = 60): Promise<VMConnection> {
   logStep("Waiting for instance to become running...");
   const pollDelay = 5000;
 
@@ -898,12 +970,12 @@ export async function waitForInstance(maxAttempts = 60): Promise<void> {
     let ip = "";
 
     try {
-      if (lightsailMode === "cli") {
+      if (_state.lightsailMode === "cli") {
         const resp = await awsCli([
           "lightsail",
           "get-instance",
           "--instance-name",
-          instanceName,
+          _state.instanceName,
           "--query",
           "instance.state.name",
           "--output",
@@ -914,7 +986,7 @@ export async function waitForInstance(maxAttempts = 60): Promise<void> {
         const resp = await lightsailRest(
           "Lightsail_20161128.GetInstance",
           JSON.stringify({
-            instanceName,
+            instanceName: _state.instanceName,
           }),
         );
         const data = parseJsonWith(resp, InstanceStateSchema);
@@ -926,12 +998,12 @@ export async function waitForInstance(maxAttempts = 60): Promise<void> {
 
     if (state === "running") {
       try {
-        if (lightsailMode === "cli") {
+        if (_state.lightsailMode === "cli") {
           ip = await awsCli([
             "lightsail",
             "get-instance",
             "--instance-name",
-            instanceName,
+            _state.instanceName,
             "--query",
             "instance.publicIpAddress",
             "--output",
@@ -941,7 +1013,7 @@ export async function waitForInstance(maxAttempts = 60): Promise<void> {
           const resp = await lightsailRest(
             "Lightsail_20161128.GetInstance",
             JSON.stringify({
-              instanceName,
+              instanceName: _state.instanceName,
             }),
           );
           const data = parseJsonWith(resp, InstanceStateSchema);
@@ -951,22 +1023,16 @@ export async function waitForInstance(maxAttempts = 60): Promise<void> {
         // ignore
       }
 
-      instanceIp = ip.trim();
+      _state.instanceIp = ip.trim();
       logStepDone();
-      logInfo(`Instance running: IP=${instanceIp}`);
+      logInfo(`Instance running: IP=${_state.instanceIp}`);
 
-      // Save connection info
-      saveVmConnection(
-        instanceIp,
-        SSH_USER,
-        "",
-        instanceName,
-        "aws",
-        undefined,
-        undefined,
-        process.env.SPAWN_ID || undefined,
-      );
-      return;
+      return {
+        ip: _state.instanceIp,
+        user: SSH_USER,
+        server_name: _state.instanceName,
+        cloud: "aws",
+      };
     }
 
     logStepInline(`Instance state: ${state || "pending"} (${attempt}/${maxAttempts})`);
@@ -983,7 +1049,7 @@ export async function waitForInstance(maxAttempts = 60): Promise<void> {
 async function waitForSsh(maxAttempts = 36): Promise<void> {
   const keyOpts = getSshKeyOpts(await ensureSshKeys());
   await sharedWaitForSsh({
-    host: instanceIp,
+    host: _state.instanceIp,
     user: SSH_USER,
     maxAttempts,
     extraSshOpts: keyOpts,
@@ -1002,7 +1068,7 @@ export async function waitForCloudInit(maxAttempts = 60): Promise<void> {
           "ssh",
           ...SSH_BASE_OPTS,
           ...keyOpts,
-          `${SSH_USER}@${instanceIp}`,
+          `${SSH_USER}@${_state.instanceIp}`,
           "test -f /home/ubuntu/.cloud-init-complete && echo done",
         ],
         {
@@ -1043,7 +1109,7 @@ export async function runServer(cmd: string, timeoutSecs?: number): Promise<void
       "ssh",
       ...SSH_BASE_OPTS,
       ...keyOpts,
-      `${SSH_USER}@${instanceIp}`,
+      `${SSH_USER}@${_state.instanceIp}`,
       `bash -c '${fullCmd.replace(/'/g, "'\\''")}'`,
     ],
     {
@@ -1066,43 +1132,6 @@ export async function runServer(cmd: string, timeoutSecs?: number): Promise<void
   }
 }
 
-export async function runServerCapture(cmd: string, timeoutSecs?: number): Promise<string> {
-  const fullCmd = `export PATH="$HOME/.npm-global/bin:$HOME/.claude/local/bin:$HOME/.local/bin:$HOME/.bun/bin:$PATH" && ${cmd}`;
-  const keyOpts = getSshKeyOpts(await ensureSshKeys());
-  const proc = Bun.spawn(
-    [
-      "ssh",
-      ...SSH_BASE_OPTS,
-      ...keyOpts,
-      `${SSH_USER}@${instanceIp}`,
-      `bash -c '${fullCmd.replace(/'/g, "'\\''")}'`,
-    ],
-    {
-      stdio: [
-        "ignore",
-        "pipe",
-        "pipe",
-      ],
-    },
-  );
-  const timeout = (timeoutSecs || 300) * 1000;
-  const timer = setTimeout(() => killWithTimeout(proc), timeout);
-  try {
-    // Drain both pipes before awaiting exit to prevent pipe buffer deadlock
-    const [stdout] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    const exitCode = await proc.exited;
-    if (exitCode !== 0) {
-      throw new Error(`run_server_capture failed (exit ${exitCode})`);
-    }
-    return stdout.trim();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 export async function uploadFile(localPath: string, remotePath: string): Promise<void> {
   if (
     !/^[a-zA-Z0-9/_.~-]+$/.test(remotePath) ||
@@ -1118,7 +1147,7 @@ export async function uploadFile(localPath: string, remotePath: string): Promise
       ...SSH_BASE_OPTS,
       ...keyOpts,
       localPath,
-      `${SSH_USER}@${instanceIp}:${remotePath}`,
+      `${SSH_USER}@${_state.instanceIp}:${remotePath}`,
     ],
     {
       stdio: [
@@ -1128,8 +1157,13 @@ export async function uploadFile(localPath: string, remotePath: string): Promise
       ],
     },
   );
-  if ((await proc.exited) !== 0) {
-    throw new Error(`upload_file failed for ${remotePath}`);
+  const timer = setTimeout(() => killWithTimeout(proc), 120_000);
+  try {
+    if ((await proc.exited) !== 0) {
+      throw new Error(`upload_file failed for ${remotePath}`);
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -1145,13 +1179,13 @@ export async function interactiveSession(cmd: string): Promise<number> {
     "ssh",
     ...SSH_INTERACTIVE_OPTS,
     ...keyOpts,
-    `${SSH_USER}@${instanceIp}`,
+    `${SSH_USER}@${_state.instanceIp}`,
     fullCmd,
   ]);
 
   // Post-session summary
   process.stderr.write("\n");
-  logWarn(`Session ended. Your Lightsail instance '${instanceName}' is still running.`);
+  logWarn(`Session ended. Your Lightsail instance '${_state.instanceName}' is still running.`);
   logWarn("Remember to delete it when you're done to avoid ongoing charges.");
   logWarn("");
   logWarn("Manage or delete it in your dashboard:");
@@ -1160,7 +1194,7 @@ export async function interactiveSession(cmd: string): Promise<number> {
   logInfo("To delete from CLI:");
   logInfo("  spawn delete");
   logInfo("To reconnect:");
-  logInfo(`  ssh ${SSH_USER}@${instanceIp}`);
+  logInfo(`  ssh ${SSH_USER}@${_state.instanceIp}`);
 
   return exitCode;
 }
@@ -1206,14 +1240,14 @@ export async function promptSpawnName(): Promise<void> {
 // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
 export async function destroyServer(name?: string): Promise<void> {
-  const target = name || instanceName;
+  const target = name || _state.instanceName;
   if (!target) {
     throw new Error("destroy_server: no instance name provided");
   }
 
   logStep(`Destroying Lightsail instance '${target}'...`);
 
-  if (lightsailMode === "cli") {
+  if (_state.lightsailMode === "cli") {
     try {
       await awsCli([
         "lightsail",

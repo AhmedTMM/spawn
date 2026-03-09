@@ -19,7 +19,7 @@ import { mockClackPrompts } from "./test-helpers";
 const { logError: mockLogError, logInfo: mockLogInfo } = mockClackPrompts();
 
 // Import after mocking
-const { checkEntity } = await import("../commands.js");
+const { checkEntity } = await import("../commands/index.js");
 
 // ── Test Fixtures ───────────────────────────────────────────────────────────
 
@@ -51,6 +51,7 @@ function createManifest(): Manifest {
       sprite: {
         name: "Sprite",
         description: "Lightweight VMs",
+        price: "test",
         url: "https://sprite.sh",
         type: "vm",
         auth: "SPRITE_TOKEN",
@@ -61,6 +62,7 @@ function createManifest(): Manifest {
       hetzner: {
         name: "Hetzner Cloud",
         description: "European cloud provider",
+        price: "test",
         url: "https://hetzner.com",
         type: "cloud",
         auth: "HCLOUD_TOKEN",

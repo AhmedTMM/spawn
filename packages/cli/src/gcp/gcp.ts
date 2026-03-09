@@ -1,11 +1,12 @@
 // gcp/gcp.ts — Core GCP Compute Engine provider: gcloud CLI wrapper, auth, provisioning, SSH
 
+import type { VMConnection } from "../history.js";
 import type { CloudInitTier } from "../shared/agents";
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { saveVmConnection } from "../history.js";
+import { handleBillingError, isBillingError, showNonBillingError } from "../shared/billing-guidance";
 import { getPackagesForTier, NODE_INSTALL_CMD, needsBun, needsNode } from "../shared/cloud-init";
 import {
   killWithTimeout,
@@ -35,12 +36,12 @@ const DASHBOARD_URL = "https://console.cloud.google.com/compute/instances";
 
 // ─── Machine Type Tiers ─────────────────────────────────────────────────────
 
-export interface MachineTypeTier {
+interface MachineTypeTier {
   id: string;
   label: string;
 }
 
-export const MACHINE_TYPES: MachineTypeTier[] = [
+const MACHINE_TYPES: MachineTypeTier[] = [
   {
     id: "e2-micro",
     label: "Shared CPU \u00b7 2 vCPU \u00b7 1 GB RAM (~$7/mo)",
@@ -79,12 +80,12 @@ export const DEFAULT_MACHINE_TYPE = "e2-medium";
 
 // ─── Zone Options ────────────────────────────────────────────────────────────
 
-export interface ZoneOption {
+interface ZoneOption {
   id: string;
   label: string;
 }
 
-export const ZONES: ZoneOption[] = [
+const ZONES: ZoneOption[] = [
   {
     id: "us-central1-a",
     label: "Iowa, US",
@@ -139,11 +140,21 @@ export const DEFAULT_ZONE = "us-central1-a";
 
 // ─── State ──────────────────────────────────────────────────────────────────
 
-let gcpProject = "";
-let gcpZone = "";
-let gcpInstanceName = "";
-let gcpServerIp = "";
-let gcpUsername = "";
+interface GcpState {
+  project: string;
+  zone: string;
+  instanceName: string;
+  serverIp: string;
+  username: string;
+}
+
+const _state: GcpState = {
+  project: "",
+  zone: "",
+  instanceName: "",
+  serverIp: "",
+  username: "",
+};
 
 // ─── gcloud CLI Wrapper ─────────────────────────────────────────────────────
 
@@ -426,8 +437,8 @@ export async function authenticate(): Promise<void> {
 export async function resolveProject(): Promise<void> {
   // 1. Env var
   if (process.env.GCP_PROJECT) {
-    gcpProject = process.env.GCP_PROJECT;
-    logInfo(`Using GCP project from environment: ${gcpProject}`);
+    _state.project = process.env.GCP_PROJECT;
+    logInfo(`Using GCP project from environment: ${_state.project}`);
     return;
   }
 
@@ -498,8 +509,55 @@ export async function resolveProject(): Promise<void> {
     throw new Error("No GCP project");
   }
 
-  gcpProject = project;
-  logInfo(`Using GCP project: ${gcpProject}`);
+  _state.project = project;
+  logInfo(`Using GCP project: ${_state.project}`);
+}
+
+// ─── Billing Pre-Check ──────────────────────────────────────────────────────
+
+/**
+ * Check if billing is enabled for the current GCP project.
+ * Runs: gcloud billing projects describe PROJECT_ID --format=value(billingEnabled)
+ * Throws if billing is not enabled (so orchestrate.ts can catch and continue).
+ */
+export async function checkBillingEnabled(): Promise<void> {
+  if (!_state.project) {
+    return;
+  }
+  try {
+    const result = gcloudSync([
+      "billing",
+      "projects",
+      "describe",
+      _state.project,
+      "--format=value(billingEnabled)",
+    ]);
+    const output = result.stdout.trim().toLowerCase();
+    if (output === "false") {
+      logWarn(`Billing is not enabled for project '${_state.project}'.`);
+      const shouldRetry = await handleBillingError("gcp");
+      if (!shouldRetry) {
+        throw new Error("GCP billing not enabled");
+      }
+      // Re-check
+      const retry = gcloudSync([
+        "billing",
+        "projects",
+        "describe",
+        _state.project,
+        "--format=value(billingEnabled)",
+      ]);
+      if (retry.stdout.trim().toLowerCase() === "false") {
+        logWarn("Billing is still not enabled. Continuing anyway — instance creation may fail.");
+      }
+    }
+  } catch (err) {
+    // Re-throw our explicit billing error
+    if (err instanceof Error && err.message === "GCP billing not enabled") {
+      throw err;
+    }
+    // Permission errors or missing billing API — non-fatal, continue
+  }
 }
 
 // ─── Interactive Pickers ────────────────────────────────────────────────────
@@ -559,8 +617,8 @@ async function ensureSshKey(): Promise<string> {
 // ─── Username ───────────────────────────────────────────────────────────────
 
 function resolveUsername(): string {
-  if (gcpUsername) {
-    return gcpUsername;
+  if (_state.username) {
+    return _state.username;
   }
   const result = Bun.spawnSync(
     [
@@ -579,7 +637,7 @@ function resolveUsername(): string {
     logError("Invalid username detected");
     throw new Error("Invalid username");
   }
-  gcpUsername = username;
+  _state.username = username;
   return username;
 }
 
@@ -662,7 +720,7 @@ export async function createInstance(
   zone: string,
   machineType: string,
   tier?: CloudInitTier,
-): Promise<void> {
+): Promise<VMConnection> {
   const username = resolveUsername();
   const pubKeys = await ensureSshKey();
   // Build ssh-keys metadata: one "user:key" entry per line
@@ -673,9 +731,11 @@ export async function createInstance(
 
   logStep(`Creating GCP instance '${name}' (type: ${machineType}, zone: ${zone})...`);
 
-  // Write startup script to a temp file
-  const tmpFile = `/tmp/spawn_startup_${Date.now()}.sh`;
-  writeFileSync(tmpFile, getStartupScript(username, tier));
+  // Write startup script to a temp file (random suffix prevents collisions and predictable paths)
+  const tmpFile = `/tmp/spawn_startup_${Date.now()}_${Math.random().toString(36).slice(2)}.sh`;
+  writeFileSync(tmpFile, getStartupScript(username, tier), {
+    mode: 0o600,
+  });
 
   const args = [
     "compute",
@@ -690,56 +750,79 @@ export async function createInstance(
     `--subnet=${process.env.GCP_SUBNET ?? "default"}`,
     `--metadata-from-file=startup-script=${tmpFile}`,
     `--metadata=ssh-keys=${sshKeysMetadata}`,
-    `--project=${gcpProject}`,
+    `--project=${_state.project}`,
     "--quiet",
   ];
 
-  let result = await gcloud(args);
-
-  // Auto-reauth on expired tokens
-  if (
-    result.exitCode !== 0 &&
-    /reauthentication|refresh.*auth|token.*expired|credentials.*invalid/i.test(result.stderr)
-  ) {
-    logWarn("Auth tokens expired -- running gcloud auth login...");
-    const reauth = await gcloudInteractive([
-      "auth",
-      "login",
-    ]);
-    if (reauth === 0) {
-      await gcloudInteractive([
-        "config",
-        "set",
-        "project",
-        gcpProject,
-      ]);
-      logInfo("Re-authenticated, retrying instance creation...");
-      result = await gcloud(args);
-    }
-  }
-
-  // Clean up temp file
+  // Wrap all gcloud calls in try/finally so the temp file is cleaned up
+  // even when billing retry re-uses it (the args array references tmpFile).
   try {
-    Bun.spawnSync([
-      "rm",
-      "-f",
-      tmpFile,
-    ]);
-  } catch {
-    /* ignore */
-  }
+    let result = await gcloud(args);
 
-  if (result.exitCode !== 0) {
-    logError("Failed to create GCP instance");
-    if (result.stderr) {
-      logError(`gcloud error: ${result.stderr}`);
+    // Auto-reauth on expired tokens
+    if (
+      result.exitCode !== 0 &&
+      /reauthentication|refresh.*auth|token.*expired|credentials.*invalid/i.test(result.stderr)
+    ) {
+      logWarn("Auth tokens expired -- running gcloud auth login...");
+      const reauth = await gcloudInteractive([
+        "auth",
+        "login",
+      ]);
+      if (reauth === 0) {
+        await gcloudInteractive([
+          "config",
+          "set",
+          "project",
+          _state.project,
+        ]);
+        logInfo("Re-authenticated, retrying instance creation...");
+        result = await gcloud(args);
+      }
     }
-    logWarn("Common issues:");
-    logWarn("  - Billing not enabled (enable at https://console.cloud.google.com/billing)");
-    logWarn("  - Compute Engine API not enabled (enable at https://console.cloud.google.com/apis)");
-    logWarn("  - Instance quota exceeded (try different GCP_ZONE)");
-    logWarn("  - Machine type unavailable (try different GCP_MACHINE_TYPE or GCP_ZONE)");
-    throw new Error("Instance creation failed");
+
+    if (result.exitCode !== 0) {
+      const errMsg = result.stderr || "Unknown error";
+      logError("Failed to create GCP instance");
+      if (result.stderr) {
+        logError(`gcloud error: ${result.stderr}`);
+      }
+
+      if (isBillingError("gcp", errMsg)) {
+        const shouldRetry = await handleBillingError("gcp");
+        if (shouldRetry) {
+          logStep("Retrying instance creation...");
+          const retryResult = await gcloud(args);
+          if (retryResult.exitCode === 0) {
+            // Fall through to IP extraction below
+          } else {
+            const retryErr = retryResult.stderr || "Unknown error";
+            logError(`Retry failed: ${retryErr}`);
+            throw new Error("Instance creation failed");
+          }
+        } else {
+          throw new Error("Instance creation failed");
+        }
+      } else {
+        showNonBillingError("gcp", [
+          "Compute Engine API not enabled (enable at https://console.cloud.google.com/apis)",
+          "Instance quota exceeded (try different GCP_ZONE)",
+          "Machine type unavailable (try different GCP_MACHINE_TYPE or GCP_ZONE)",
+        ]);
+        throw new Error("Instance creation failed");
+      }
+    }
+  } finally {
+    // Clean up temp file after all retry paths have completed
+    try {
+      Bun.spawnSync([
+        "rm",
+        "-f",
+        tmpFile,
+      ]);
+    } catch {
+      /* ignore */
+    }
   }
 
   // Get external IP
@@ -749,30 +832,26 @@ export async function createInstance(
     "describe",
     name,
     `--zone=${zone}`,
-    `--project=${gcpProject}`,
+    `--project=${_state.project}`,
     "--format=get(networkInterfaces[0].accessConfigs[0].natIP)",
   ]);
 
-  gcpInstanceName = name;
-  gcpZone = zone;
-  gcpServerIp = ipResult.stdout;
+  _state.instanceName = name;
+  _state.zone = zone;
+  _state.serverIp = ipResult.stdout;
 
-  logInfo(`Instance created: IP=${gcpServerIp}`);
+  logInfo(`Instance created: IP=${_state.serverIp}`);
 
-  // Save connection info with zone/project for later deletion
-  saveVmConnection(
-    gcpServerIp,
-    username,
-    "",
-    name,
-    "gcp",
-    undefined,
-    {
+  return {
+    ip: _state.serverIp,
+    user: username,
+    server_name: name,
+    cloud: "gcp",
+    metadata: {
       zone,
-      project: gcpProject,
+      project: _state.project,
     },
-    process.env.SPAWN_ID || undefined,
-  );
+  };
 }
 
 // ─── SSH Operations ─────────────────────────────────────────────────────────
@@ -781,7 +860,7 @@ async function waitForSsh(maxAttempts = 36): Promise<void> {
   const username = resolveUsername();
   const keyOpts = getSshKeyOpts(await ensureSshKeys());
   await sharedWaitForSsh({
-    host: gcpServerIp,
+    host: _state.serverIp,
     user: username,
     maxAttempts,
     extraSshOpts: keyOpts,
@@ -802,7 +881,7 @@ export async function waitForCloudInit(maxAttempts = 60): Promise<void> {
           "ssh",
           ...SSH_BASE_OPTS,
           ...keyOpts,
-          `${username}@${gcpServerIp}`,
+          `${username}@${_state.serverIp}`,
           "test -f /tmp/.cloud-init-complete",
         ],
         {
@@ -843,7 +922,7 @@ export async function runServer(cmd: string, timeoutSecs?: number): Promise<void
       "ssh",
       ...SSH_BASE_OPTS,
       ...keyOpts,
-      `${username}@${gcpServerIp}`,
+      `${username}@${_state.serverIp}`,
       `bash -c ${shellQuote(fullCmd)}`,
     ],
     {
@@ -862,46 +941,6 @@ export async function runServer(cmd: string, timeoutSecs?: number): Promise<void
     if (exitCode !== 0) {
       throw new Error(`run_server failed (exit ${exitCode}): ${cmd}`);
     }
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-export async function runServerCapture(cmd: string, timeoutSecs?: number): Promise<string> {
-  const username = resolveUsername();
-  const fullCmd = `export PATH="$HOME/.npm-global/bin:$HOME/.claude/local/bin:$HOME/.local/bin:$HOME/.bun/bin:$PATH" && ${cmd}`;
-  const keyOpts = getSshKeyOpts(await ensureSshKeys());
-
-  const proc = Bun.spawn(
-    [
-      "ssh",
-      ...SSH_BASE_OPTS,
-      ...keyOpts,
-      `${username}@${gcpServerIp}`,
-      `bash -c ${shellQuote(fullCmd)}`,
-    ],
-    {
-      stdio: [
-        "ignore",
-        "pipe",
-        "pipe",
-      ],
-      env: process.env,
-    },
-  );
-  const timeout = (timeoutSecs || 300) * 1000;
-  const timer = setTimeout(() => killWithTimeout(proc), timeout);
-  try {
-    // Drain both pipes before awaiting exit to prevent pipe buffer deadlock
-    const [stdout] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    const exitCode = await proc.exited;
-    if (exitCode !== 0) {
-      throw new Error(`run_server_capture failed (exit ${exitCode})`);
-    }
-    return stdout.trim();
   } finally {
     clearTimeout(timer);
   }
@@ -927,7 +966,7 @@ export async function uploadFile(localPath: string, remotePath: string): Promise
       ...SSH_BASE_OPTS,
       ...keyOpts,
       localPath,
-      `${username}@${gcpServerIp}:${expandedPath}`,
+      `${username}@${_state.serverIp}:${expandedPath}`,
     ],
     {
       stdio: [
@@ -938,9 +977,14 @@ export async function uploadFile(localPath: string, remotePath: string): Promise
       env: process.env,
     },
   );
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) {
-    throw new Error(`upload_file failed for ${remotePath}`);
+  const timer = setTimeout(() => killWithTimeout(proc), 120_000);
+  try {
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) {
+      throw new Error(`upload_file failed for ${remotePath}`);
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -956,13 +1000,13 @@ export async function interactiveSession(cmd: string): Promise<number> {
     "ssh",
     ...SSH_INTERACTIVE_OPTS,
     ...keyOpts,
-    `${username}@${gcpServerIp}`,
+    `${username}@${_state.serverIp}`,
     fullCmd,
   ]);
 
   // Post-session summary
   process.stderr.write("\n");
-  logWarn(`Session ended. Your GCP instance '${gcpInstanceName}' is still running.`);
+  logWarn(`Session ended. Your GCP instance '${_state.instanceName}' is still running.`);
   logWarn("Remember to delete it when you're done to avoid ongoing charges.");
   logWarn("");
   logWarn("Manage or delete it in your dashboard:");
@@ -971,7 +1015,7 @@ export async function interactiveSession(cmd: string): Promise<number> {
   logInfo("To delete from CLI:");
   logInfo("  spawn delete");
   logInfo("To reconnect:");
-  logInfo(`  gcloud compute ssh ${gcpInstanceName} --zone=${gcpZone} --project=${gcpProject}`);
+  logInfo(`  gcloud compute ssh ${_state.instanceName} --zone=${_state.zone} --project=${_state.project}`);
 
   return exitCode;
 }
@@ -979,8 +1023,8 @@ export async function interactiveSession(cmd: string): Promise<number> {
 // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
 export async function destroyInstance(name?: string): Promise<void> {
-  const instanceName = name || gcpInstanceName;
-  const zone = gcpZone || process.env.GCP_ZONE || DEFAULT_ZONE;
+  const instanceName = name || _state.instanceName;
+  const zone = _state.zone || process.env.GCP_ZONE || DEFAULT_ZONE;
 
   if (!instanceName) {
     logError("destroy: no instance name provided");
@@ -994,7 +1038,7 @@ export async function destroyInstance(name?: string): Promise<void> {
     "delete",
     instanceName,
     `--zone=${zone}`,
-    `--project=${gcpProject}`,
+    `--project=${_state.project}`,
     "--quiet",
   ]);
 

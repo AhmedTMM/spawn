@@ -1,27 +1,30 @@
 // shared/orchestrate.ts — Shared orchestration pipeline for deploying agents
 // Each cloud implements CloudOrchestrator and calls runOrchestration().
 
+import type { VMConnection } from "../history.js";
 import type { CloudRunner } from "./agent-setup";
 import type { AgentConfig } from "./agents";
 
-import { generateSpawnId, saveSpawnRecord } from "../history.js";
+import { generateSpawnId, saveLaunchCmd, saveSpawnRecord } from "../history.js";
 import { offerGithubAuth, wrapSshCall } from "./agent-setup";
 import { tryTarballInstall } from "./agent-tarball";
 import { generateEnvConfig } from "./agents";
-import { getModelIdInteractive, getOrPromptApiKey } from "./oauth";
+import { getOrPromptApiKey } from "./oauth";
 import { logInfo, logStep, logWarn, prepareStdinForHandoff, withRetry } from "./ui";
 
 export interface CloudOrchestrator {
   cloudName: string;
   cloudLabel: string;
   runner: CloudRunner;
+  /** When true, skip tarball + agent install (e.g. booting from a pre-baked snapshot). */
+  skipAgentInstall?: boolean;
   authenticate(): Promise<void>;
+  checkAccountReady?(): Promise<void>;
   promptSize(): Promise<void>;
-  createServer(name: string, spawnId?: string): Promise<void>;
+  createServer(name: string): Promise<VMConnection>;
   getServerName(): Promise<string>;
   waitForReady(): Promise<void>;
   interactiveSession(cmd: string): Promise<number>;
-  saveLaunchCmd(launchCmd: string, spawnId?: string): void;
 }
 
 /**
@@ -67,7 +70,20 @@ export async function runOrchestration(
   // 1. Authenticate with cloud provider
   await cloud.authenticate();
 
-  // 2. Pre-provision hooks
+  // 1b. Pre-flight account readiness check (billing, email verification, etc.)
+  if (cloud.checkAccountReady) {
+    try {
+      await cloud.checkAccountReady();
+    } catch {
+      // non-fatal — let createServer be the final arbiter
+    }
+  }
+
+  // 2. Get API key (immediately after cloud auth — before any other prompts
+  //    so the "opening browser" message leads directly to OpenRouter OAuth)
+  const apiKey = await getOrPromptApiKey(agentName, cloud.cloudName);
+
+  // 3. Pre-provision hooks (e.g., GitHub auth prompt — non-fatal)
   if (agent.preProvision) {
     try {
       await agent.preProvision();
@@ -76,14 +92,8 @@ export async function runOrchestration(
     }
   }
 
-  // 3. Get API key (before provisioning so user isn't waiting)
-  const apiKey = await getOrPromptApiKey(agentName, cloud.cloudName);
-
-  // 4. Model selection (if agent needs it)
-  let modelId: string | undefined;
-  if (agent.modelPrompt) {
-    modelId = await getModelIdInteractive(agent.modelDefault || "openrouter/auto", agent.name);
-  }
+  // 4. Model ID (use agent default — no interactive prompt)
+  const modelId = agent.modelDefault || process.env.MODEL_ID;
 
   // 5. Size/bundle selection
   await cloud.promptSize();
@@ -91,9 +101,9 @@ export async function runOrchestration(
   // 6. Provision server
   const spawnId = generateSpawnId();
   const serverName = await cloud.getServerName();
-  await cloud.createServer(serverName, spawnId);
+  const connection = await cloud.createServer(serverName);
 
-  // 6b. Record the spawn now that the server exists
+  // 6b. Record the spawn atomically with connection data
   const spawnName = process.env.SPAWN_NAME_KEBAB || process.env.SPAWN_NAME || undefined;
   saveSpawnRecord({
     id: spawnId,
@@ -105,6 +115,7 @@ export async function runOrchestration(
           name: spawnName,
         }
       : {}),
+    connection,
   });
 
   // 7. Wait for readiness
@@ -112,14 +123,18 @@ export async function runOrchestration(
 
   const envContent = generateEnvConfig(agent.envVars(apiKey));
 
-  // 8. Install agent (try tarball first on cloud VMs)
-  let installedFromTarball = false;
-  if (cloud.cloudName !== "local" && !agent.skipTarball) {
-    const tarball = options?.tryTarball ?? tryTarballInstall;
-    installedFromTarball = await tarball(cloud.runner, agentName);
-  }
-  if (!installedFromTarball) {
-    await agent.install();
+  // 8. Install agent (skip entirely for snapshot boots, try tarball first on cloud VMs)
+  if (cloud.skipAgentInstall) {
+    logInfo("Snapshot boot — skipping agent install");
+  } else {
+    let installedFromTarball = false;
+    if (cloud.cloudName !== "local" && !agent.skipTarball) {
+      const tarball = options?.tryTarball ?? tryTarballInstall;
+      installedFromTarball = await tarball(cloud.runner, agentName);
+    }
+    if (!installedFromTarball) {
+      await agent.install();
+    }
   }
 
   // 9. Inject environment variables via .spawnrc
@@ -178,7 +193,7 @@ export async function runOrchestration(
   prepareStdinForHandoff();
 
   const launchCmd = agent.launchCmd();
-  cloud.saveLaunchCmd(launchCmd, spawnId);
+  saveLaunchCmd(launchCmd, spawnId);
 
   // Wrap in restart loop for cloud VMs — not for local execution
   const sessionCmd = cloud.cloudName === "local" ? launchCmd : wrapWithRestartLoop(launchCmd);

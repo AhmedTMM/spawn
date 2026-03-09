@@ -1,10 +1,12 @@
 // digitalocean/digitalocean.ts — Core DigitalOcean provider: API, auth, SSH, provisioning
 
+import type { VMConnection } from "../history.js";
 import type { CloudInitTier } from "../shared/agents";
 
 import { mkdirSync, readFileSync } from "node:fs";
-import { saveVmConnection } from "../history.js";
+import { handleBillingError, isBillingError, showNonBillingError } from "../shared/billing-guidance";
 import { getPackagesForTier, NODE_INSTALL_CMD, needsBun, needsNode } from "../shared/cloud-init";
+import { OAUTH_CSS } from "../shared/oauth";
 import { parseJsonObj } from "../shared/parse";
 import {
   killWithTimeout,
@@ -15,7 +17,7 @@ import {
   spawnInteractive,
 } from "../shared/ssh";
 import { ensureSshKeys, getSshFingerprint, getSshKeyOpts } from "../shared/ssh-keys";
-import { isNumber, isString, toObjectArray } from "../shared/type-guards";
+import { getErrorMessage, isNumber, isString, toObjectArray, toRecord } from "../shared/type-guards";
 import {
   defaultSpawnName,
   getSpawnCloudConfigPath,
@@ -58,7 +60,7 @@ const DO_OAUTH_TOKEN = "https://cloud.digitalocean.com/v1/oauth/token";
 //   5. This is the same pattern used by: gh CLI (GitHub), doctl (DigitalOcean),
 //      gcloud (Google), and az (Azure).
 //
-// TODO(#2041): PKCE migration — monitor and migrate when DigitalOcean adds support.
+// TODO: PKCE migration — monitor and migrate when DigitalOcean adds support.
 //   Last checked: 2026-03 — PKCE without client_secret returns 401 invalid_request.
 //   Check status: POST to /v1/oauth/token with code_verifier but WITHOUT client_secret.
 //   If it succeeds, migrate using this checklist:
@@ -89,9 +91,18 @@ const DO_SCOPES = [
 const DO_OAUTH_CALLBACK_PORT = 5190;
 
 // ─── State ───────────────────────────────────────────────────────────────────
-let doToken = "";
-let doDropletId = "";
-let doServerIp = "";
+
+interface DigitalOceanState {
+  token: string;
+  dropletId: string;
+  serverIp: string;
+}
+
+const _state: DigitalOceanState = {
+  token: "",
+  dropletId: "",
+  serverIp: "",
+};
 
 // ─── API Client ──────────────────────────────────────────────────────────────
 
@@ -103,7 +114,7 @@ async function doApi(method: string, endpoint: string, body?: string, maxRetries
     try {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${doToken}`,
+        Authorization: `Bearer ${_state.token}`,
       };
       const opts: RequestInit = {
         method,
@@ -208,7 +219,7 @@ function isTokenExpired(): boolean {
 // ─── Token Validation ────────────────────────────────────────────────────────
 
 async function testDoToken(): Promise<boolean> {
-  if (!doToken) {
+  if (!_state.token) {
     return false;
   }
   try {
@@ -219,10 +230,57 @@ async function testDoToken(): Promise<boolean> {
   }
 }
 
-// ─── DO OAuth Flow ──────────────────────────────────────────────────────────
+/**
+ * Check DigitalOcean account status for billing issues.
+ * Uses the /v2/account endpoint which is already called during token validation.
+ * Throws if the account is locked (billing issue). Warns on other statuses.
+ */
+export async function checkAccountStatus(): Promise<void> {
+  if (!_state.token) {
+    return;
+  }
+  try {
+    const text = await doApi("GET", "/account", undefined, 1);
+    const data = parseJsonObj(text);
+    const rec = toRecord(data?.account);
+    if (!rec) {
+      return;
+    }
+    const status = isString(rec.status) ? rec.status : "";
+    const emailVerified = rec.email_verified;
 
-const OAUTH_CSS =
-  "*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#fff;color:#090a0b}@media(prefers-color-scheme:dark){body{background:#090a0b;color:#fafafa}}.card{text-align:center;max-width:400px;padding:2rem}.icon{font-size:2.5rem;margin-bottom:1rem}h1{font-size:1.25rem;font-weight:600;margin-bottom:.5rem}p{font-size:.875rem;color:#6b7280}@media(prefers-color-scheme:dark){p{color:#9ca3af}}";
+    if (status === "locked") {
+      logWarn("Your DigitalOcean account is locked (usually a billing issue).");
+      const shouldRetry = await handleBillingError("digitalocean");
+      if (!shouldRetry) {
+        throw new Error("DigitalOcean account is locked");
+      }
+      // Re-check after user says they fixed it
+      const retryText = await doApi("GET", "/account", undefined, 1);
+      const retryData = parseJsonObj(retryText);
+      const retryRec = toRecord(retryData?.account);
+      if (retryRec) {
+        if (isString(retryRec.status) && retryRec.status === "locked") {
+          logWarn("Account is still locked. Continuing anyway — server creation may fail.");
+        }
+      }
+    } else if (status === "warning") {
+      logWarn("Your DigitalOcean account has a warning status. You may experience limitations.");
+    }
+
+    if (emailVerified === false) {
+      logWarn("Your DigitalOcean email is not verified. Verify it to avoid account restrictions.");
+    }
+  } catch (err) {
+    // Only re-throw if it's our explicit lock error
+    if (err instanceof Error && err.message === "DigitalOcean account is locked") {
+      throw err;
+    }
+    // Otherwise non-fatal — let createServer be the final check
+  }
+}
+
+// ─── DO OAuth Flow ──────────────────────────────────────────────────────────
 
 const OAUTH_SUCCESS_HTML = `<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${OAUTH_CSS}</style></head><body><div class="card"><div class="icon">&#10003;</div><h1>DigitalOcean Authorization Successful</h1><p>You can close this tab and return to your terminal.</p></div><script>setTimeout(function(){try{window.close()}catch(e){}},3000)</script></body></html>`;
 
@@ -474,14 +532,14 @@ async function tryDoOAuth(): Promise<string | null> {
 export async function ensureDoToken(): Promise<boolean> {
   // 1. Env var
   if (process.env.DO_API_TOKEN) {
-    doToken = process.env.DO_API_TOKEN.trim();
+    _state.token = process.env.DO_API_TOKEN.trim();
     if (await testDoToken()) {
       logInfo("Using DigitalOcean API token from environment");
-      await saveTokenToConfig(doToken);
+      await saveTokenToConfig(_state.token);
       return false;
     }
     logWarn("DO_API_TOKEN from environment is invalid");
-    doToken = "";
+    _state.token = "";
   }
 
   // 2. Saved config (check expiry first, try refresh if needed)
@@ -491,14 +549,14 @@ export async function ensureDoToken(): Promise<boolean> {
       logWarn("Saved DigitalOcean token has expired, trying refresh...");
       const refreshed = await tryRefreshDoToken();
       if (refreshed) {
-        doToken = refreshed;
+        _state.token = refreshed;
         if (await testDoToken()) {
           logInfo("Using refreshed DigitalOcean token");
           return false;
         }
       }
     } else {
-      doToken = saved;
+      _state.token = saved;
       if (await testDoToken()) {
         logInfo("Using saved DigitalOcean API token");
         return false;
@@ -507,26 +565,26 @@ export async function ensureDoToken(): Promise<boolean> {
       // Try refresh as fallback
       const refreshed = await tryRefreshDoToken();
       if (refreshed) {
-        doToken = refreshed;
+        _state.token = refreshed;
         if (await testDoToken()) {
           logInfo("Using refreshed DigitalOcean token");
           return false;
         }
       }
     }
-    doToken = "";
+    _state.token = "";
   }
 
   // 3. Try OAuth browser flow
   const oauthToken = await tryDoOAuth();
   if (oauthToken) {
-    doToken = oauthToken;
+    _state.token = oauthToken;
     if (await testDoToken()) {
       logInfo("Using DigitalOcean token from OAuth");
       return true;
     }
     logWarn("OAuth token failed validation");
-    doToken = "";
+    _state.token = "";
   }
 
   // 4. Manual entry (fallback)
@@ -539,14 +597,14 @@ export async function ensureDoToken(): Promise<boolean> {
       logError("Token cannot be empty");
       continue;
     }
-    doToken = token.trim();
+    _state.token = token.trim();
     if (await testDoToken()) {
-      await saveTokenToConfig(doToken);
+      await saveTokenToConfig(_state.token);
       logInfo("DigitalOcean API token validated and saved");
       return false;
     }
     logError("Token is invalid");
-    doToken = "";
+    _state.token = "";
   }
 
   logError("No valid token after 3 attempts");
@@ -591,7 +649,7 @@ export async function ensureSshKey(): Promise<void> {
     try {
       regText = await doApi("POST", "/account/keys", body);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = getErrorMessage(err);
       // Key may already exist under a different name — non-fatal
       if (msg.includes("already been taken") || msg.includes("already in use")) {
         logInfo(`SSH key '${key.name}' already registered (under a different name)`);
@@ -612,12 +670,12 @@ export async function ensureSshKey(): Promise<void> {
 
 // ─── Droplet Size Options ────────────────────────────────────────────────────
 
-export interface DropletSize {
+interface DropletSize {
   id: string;
   label: string;
 }
 
-export const DROPLET_SIZES: DropletSize[] = [
+const DROPLET_SIZES: DropletSize[] = [
   {
     id: "s-1vcpu-1gb",
     label: "1 vCPU \u00b7 1 GB RAM \u00b7 $6/mo",
@@ -644,16 +702,16 @@ export const DROPLET_SIZES: DropletSize[] = [
   },
 ];
 
-export const DEFAULT_DROPLET_SIZE = "s-2vcpu-4gb";
+export const DEFAULT_DROPLET_SIZE = "s-2vcpu-2gb";
 
 // ─── Region Options ──────────────────────────────────────────────────────────
 
-export interface DoRegion {
+interface DoRegion {
   id: string;
   label: string;
 }
 
-export const DO_REGIONS: DoRegion[] = [
+const DO_REGIONS: DoRegion[] = [
   {
     id: "nyc1",
     label: "New York 1",
@@ -740,29 +798,16 @@ export async function promptDoRegion(): Promise<string> {
 
 // ─── Provisioning ────────────────────────────────────────────────────────────
 
-function getCloudInitUserdata(tier: CloudInitTier = "full", agentName?: string): string {
+function getCloudInitUserdata(tier: CloudInitTier = "full"): string {
   const packages = getPackagesForTier(tier);
   const lines = [
     "#!/bin/bash",
     "set -e",
     "export HOME=/root",
     "export DEBIAN_FRONTEND=noninteractive",
+    "apt-get update -y",
+    `apt-get install -y --no-install-recommends ${packages.join(" ")}`,
   ];
-
-  if (agentName) {
-    // Install Docker FIRST (uses apt internally), then start image pull in background.
-    // The pull runs in parallel with the remaining apt-get/node/bun installs below.
-    if (!/^[a-z0-9-]+$/.test(agentName)) {
-      throw new Error(`Invalid agent name: ${agentName}`);
-    }
-    lines.push(
-      "curl -fsSL https://get.docker.com | sh",
-      `nohup docker pull "ghcr.io/openrouterteam/spawn-${agentName}:latest" > /tmp/docker-pull.log 2>&1 &`,
-    );
-  }
-
-  // Install remaining packages (runs in parallel with docker pull above)
-  lines.push("apt-get update -y", `apt-get install -y --no-install-recommends ${packages.join(" ")}`);
   if (needsNode(tier)) {
     lines.push(`${NODE_INSTALL_CMD} || true`);
   }
@@ -784,9 +829,9 @@ export async function createServer(
   tier?: CloudInitTier,
   dropletSize?: string,
   region?: string,
-  agentName?: string,
-): Promise<void> {
-  const size = dropletSize || process.env.DO_DROPLET_SIZE || "s-2vcpu-4gb";
+  snapshotId?: string,
+): Promise<VMConnection> {
+  const size = dropletSize || process.env.DO_DROPLET_SIZE || "s-2vcpu-2gb";
   const effectiveRegion = region || process.env.DO_REGION || "nyc3";
 
   if (!validateRegionName(effectiveRegion)) {
@@ -794,9 +839,12 @@ export async function createServer(
     throw new Error("Invalid region");
   }
 
-  const image = "ubuntu-24-04-x64";
+  const image = snapshotId ? Number(snapshotId) : "ubuntu-24-04-x64";
+  const imageLabel = snapshotId ? `snapshot:${snapshotId}` : "ubuntu-24-04-x64";
 
-  logStep(`Creating DigitalOcean droplet '${name}' (size: ${size}, region: ${effectiveRegion})...`);
+  logStep(
+    `Creating DigitalOcean droplet '${name}' (size: ${size}, region: ${effectiveRegion}, image: ${imageLabel})...`,
+  );
 
   // Get all SSH key IDs
   const keysText = await doApi("GET", "/account/keys");
@@ -805,47 +853,73 @@ export async function createServer(
     .map((k) => (isNumber(k.id) ? k.id : 0))
     .filter((n) => n > 0);
 
-  const body = JSON.stringify({
+  const dropletConfig: Record<string, unknown> = {
     name,
     region: effectiveRegion,
     size,
     image,
     ssh_keys: sshKeyIds,
-    user_data: getCloudInitUserdata(tier, agentName),
     backups: false,
     monitoring: false,
-  });
+  };
+
+  // Only include cloud-init userdata when NOT booting from a snapshot
+  if (!snapshotId) {
+    dropletConfig.user_data = getCloudInitUserdata(tier);
+  }
+
+  const body = JSON.stringify(dropletConfig);
 
   const createText = await doApi("POST", "/droplets", body);
   const createData = parseJsonObj(createText);
 
   if (!createData?.droplet?.id) {
-    const errMsg = createData?.message || "Unknown error";
+    const errMsg = String(createData?.message || "Unknown error");
     logError(`Failed to create DigitalOcean droplet: ${errMsg}`);
-    logWarn("Common issues:");
-    logWarn("  - Insufficient account balance or payment method required");
-    logWarn("  - Region/size unavailable (try different DO_REGION or DO_DROPLET_SIZE)");
-    logWarn("  - Droplet limit reached (check account limits)");
-    logWarn(`Check your dashboard: ${DO_DASHBOARD_URL}`);
+
+    if (isBillingError("digitalocean", errMsg)) {
+      const shouldRetry = await handleBillingError("digitalocean");
+      if (shouldRetry) {
+        logStep("Retrying droplet creation...");
+        const retryText = await doApi("POST", "/droplets", body);
+        const retryData = parseJsonObj(retryText);
+        if (retryData?.droplet?.id) {
+          _state.dropletId = String(retryData.droplet.id);
+          logInfo(`Droplet created: ID=${_state.dropletId}`);
+          await waitForDropletActive(_state.dropletId);
+          return {
+            ip: _state.serverIp,
+            user: "root",
+            server_id: _state.dropletId,
+            server_name: name,
+            cloud: "digitalocean",
+          };
+        }
+        const retryErr = String(retryData?.message || "Unknown error");
+        logError(`Retry failed: ${retryErr}`);
+      }
+    } else {
+      showNonBillingError("digitalocean", [
+        "Region/size unavailable (try different DO_REGION or DO_DROPLET_SIZE)",
+        "Droplet limit reached (check account limits)",
+      ]);
+    }
     throw new Error("Droplet creation failed");
   }
 
-  doDropletId = String(createData.droplet.id);
-  logInfo(`Droplet created: ID=${doDropletId}`);
+  _state.dropletId = String(createData.droplet.id);
+  logInfo(`Droplet created: ID=${_state.dropletId}`);
 
   // Wait for droplet to become active and get IP
-  await waitForDropletActive(doDropletId);
+  await waitForDropletActive(_state.dropletId);
 
-  saveVmConnection(
-    doServerIp,
-    "root",
-    doDropletId,
-    name,
-    "digitalocean",
-    undefined,
-    undefined,
-    process.env.SPAWN_ID || undefined,
-  );
+  return {
+    ip: _state.serverIp,
+    user: "root",
+    server_id: _state.dropletId,
+    server_name: name,
+    cloud: "digitalocean",
+  };
 }
 
 async function waitForDropletActive(dropletId: string, maxAttempts = 60): Promise<void> {
@@ -860,9 +934,9 @@ async function waitForDropletActive(dropletId: string, maxAttempts = 60): Promis
       const v4Networks = toObjectArray(data?.droplet?.networks?.v4);
       const publicNet = v4Networks.find((n) => n.type === "public");
       if (publicNet?.ip_address) {
-        doServerIp = isString(publicNet.ip_address) ? publicNet.ip_address : "";
+        _state.serverIp = isString(publicNet.ip_address) ? publicNet.ip_address : "";
         logStepDone();
-        logInfo(`Droplet active, IP: ${doServerIp}`);
+        logInfo(`Droplet active, IP: ${_state.serverIp}`);
         return;
       }
     }
@@ -878,10 +952,58 @@ async function waitForDropletActive(dropletId: string, maxAttempts = 60): Promis
   logStepDone();
 }
 
+// ─── Snapshot Lookup ─────────────────────────────────────────────────────────
+
+export async function findSpawnSnapshot(agentName: string): Promise<string | null> {
+  try {
+    // DO snapshots don't support tags — filter by name prefix instead
+    const prefix = `spawn-${agentName}-`;
+    const text = await doApi("GET", "/images?private=true&per_page=100", undefined, 1);
+    const data = parseJsonObj(text);
+    const allImages = toObjectArray(data?.images);
+    const images = allImages.filter((img) => isString(img.name) && img.name.startsWith(prefix));
+    if (images.length === 0) {
+      return null;
+    }
+
+    // Sort by created_at descending to get the latest snapshot
+    images.sort((a, b) => {
+      const aDate = isString(a.created_at) ? a.created_at : "";
+      const bDate = isString(b.created_at) ? b.created_at : "";
+      return bDate.localeCompare(aDate);
+    });
+
+    const latestId = images[0].id;
+    if (!isNumber(latestId) || latestId <= 0) {
+      return null;
+    }
+
+    logInfo(`Found pre-built snapshot for ${agentName} (ID: ${latestId})`);
+    return String(latestId);
+  } catch {
+    return null;
+  }
+}
+
+// ─── SSH-Only Wait (for snapshot boots) ──────────────────────────────────────
+
+export async function waitForSshOnly(ip?: string): Promise<void> {
+  const serverIp = ip || _state.serverIp;
+  const selectedKeys = await ensureSshKeys();
+  const keyOpts = getSshKeyOpts(selectedKeys);
+  await sharedWaitForSsh({
+    host: serverIp,
+    user: "root",
+    maxAttempts: 36,
+    extraSshOpts: keyOpts,
+  });
+  logInfo("SSH available (snapshot boot — skipping cloud-init)");
+}
+
 // ─── SSH Execution ───────────────────────────────────────────────────────────
 
-export async function waitForCloudInit(ip?: string, _maxAttempts = 60): Promise<void> {
-  const serverIp = ip || doServerIp;
+export async function waitForCloudInit(ip?: string, maxAttempts = 60): Promise<void> {
+  const serverIp = ip || _state.serverIp;
   const selectedKeys = await ensureSshKeys();
   const keyOpts = getSshKeyOpts(selectedKeys);
   await sharedWaitForSsh({
@@ -933,7 +1055,7 @@ export async function waitForCloudInit(ip?: string, _maxAttempts = 60): Promise<
   }
 
   // Fallback poll if streaming failed (e.g. log file not yet created)
-  for (let attempt = 1; attempt <= 20; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const proc = Bun.spawn(
         [
@@ -964,7 +1086,7 @@ export async function waitForCloudInit(ip?: string, _maxAttempts = 60): Promise<
     } catch {
       /* ignore */
     }
-    logStepInline(`Cloud-init in progress (${attempt}/20)`);
+    logStepInline(`Cloud-init in progress (${attempt}/${maxAttempts})`);
     await sleep(5000);
   }
   logStepDone();
@@ -972,7 +1094,7 @@ export async function waitForCloudInit(ip?: string, _maxAttempts = 60): Promise<
 }
 
 export async function runServer(cmd: string, timeoutSecs?: number, ip?: string): Promise<void> {
-  const serverIp = ip || doServerIp;
+  const serverIp = ip || _state.serverIp;
   const fullCmd = `export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH" && ${cmd}`;
   const keyOpts = getSshKeyOpts(await ensureSshKeys());
 
@@ -1005,48 +1127,8 @@ export async function runServer(cmd: string, timeoutSecs?: number, ip?: string):
   }
 }
 
-export async function runServerCapture(cmd: string, timeoutSecs?: number, ip?: string): Promise<string> {
-  const serverIp = ip || doServerIp;
-  const fullCmd = `export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH" && ${cmd}`;
-  const keyOpts = getSshKeyOpts(await ensureSshKeys());
-
-  const proc = Bun.spawn(
-    [
-      "ssh",
-      ...SSH_BASE_OPTS,
-      ...keyOpts,
-      `root@${serverIp}`,
-      fullCmd,
-    ],
-    {
-      stdio: [
-        "ignore",
-        "pipe",
-        "pipe",
-      ],
-    },
-  );
-
-  const timeout = (timeoutSecs || 300) * 1000;
-  const timer = setTimeout(() => killWithTimeout(proc), timeout);
-  try {
-    // Drain both pipes before awaiting exit to prevent pipe buffer deadlock
-    const [stdout] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    const exitCode = await proc.exited;
-    if (exitCode !== 0) {
-      throw new Error(`run_server_capture failed (exit ${exitCode})`);
-    }
-    return stdout.trim();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 export async function uploadFile(localPath: string, remotePath: string, ip?: string): Promise<void> {
-  const serverIp = ip || doServerIp;
+  const serverIp = ip || _state.serverIp;
   if (
     !/^[a-zA-Z0-9/_.~-]+$/.test(remotePath) ||
     remotePath.includes("..") ||
@@ -1073,14 +1155,19 @@ export async function uploadFile(localPath: string, remotePath: string, ip?: str
       ],
     },
   );
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) {
-    throw new Error(`upload_file failed for ${remotePath}`);
+  const timer = setTimeout(() => killWithTimeout(proc), 120_000);
+  try {
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) {
+      throw new Error(`upload_file failed for ${remotePath}`);
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 export async function interactiveSession(cmd: string, ip?: string): Promise<number> {
-  const serverIp = ip || doServerIp;
+  const serverIp = ip || _state.serverIp;
   const term = sanitizeTermValue(process.env.TERM || "xterm-256color");
   // Single-quote escaping prevents premature shell expansion of $variables in cmd
   const shellEscapedCmd = cmd.replace(/'/g, "'\\''");
@@ -1097,7 +1184,7 @@ export async function interactiveSession(cmd: string, ip?: string): Promise<numb
 
   // Post-session summary
   process.stderr.write("\n");
-  logWarn(`Session ended. Your DigitalOcean droplet (ID: ${doDropletId}) is still running.`);
+  logWarn(`Session ended. Your DigitalOcean droplet (ID: ${_state.dropletId}) is still running.`);
   logWarn("Remember to delete it when you're done to avoid ongoing charges.");
   logWarn("");
   logWarn("Manage or delete it in your dashboard:");
@@ -1164,7 +1251,7 @@ export async function promptSpawnName(): Promise<void> {
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
 export async function destroyServer(dropletId?: string): Promise<void> {
-  const id = dropletId || doDropletId;
+  const id = dropletId || _state.dropletId;
   if (!id) {
     logError("destroy_server: no droplet ID provided");
     throw new Error("No droplet ID");

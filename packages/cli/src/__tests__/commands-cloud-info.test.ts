@@ -25,6 +25,7 @@ const manifestWithNotes = {
     emptycloud: {
       name: "Empty Cloud",
       description: "Cloud with no agents",
+      price: "test",
       url: "https://empty.cloud",
       type: "vm",
       auth: "token",
@@ -58,7 +59,7 @@ const {
 } = mockClackPrompts();
 
 // Import commands after mock setup
-const { cmdCloudInfo } = await import("../commands.js");
+const { cmdCloudInfo } = await import("../commands/index.js");
 
 describe("cmdCloudInfo", () => {
   let consoleMocks: ReturnType<typeof createConsoleMocks>;
@@ -195,16 +196,12 @@ describe("cmdCloudInfo", () => {
   // ── Error paths: unknown cloud ────────────────────────────────────
 
   describe("unknown cloud", () => {
-    it("should exit with error for unknown cloud", async () => {
+    it("should exit with error and suggest spawn clouds for unknown cloud", async () => {
       await expect(cmdCloudInfo("nonexistent")).rejects.toThrow("process.exit");
       expect(processExitSpy).toHaveBeenCalledWith(1);
 
       const errorCalls = mockLogError.mock.calls.map((c: unknown[]) => c.join(" "));
       expect(errorCalls.some((msg: string) => msg.includes("Unknown cloud"))).toBe(true);
-    });
-
-    it("should suggest spawn clouds command", async () => {
-      await expect(cmdCloudInfo("nonexistent")).rejects.toThrow("process.exit");
 
       const infoCalls = mockLogInfo.mock.calls.map((c: unknown[]) => c.join(" "));
       expect(infoCalls.some((msg: string) => msg.includes("spawn clouds"))).toBe(true);

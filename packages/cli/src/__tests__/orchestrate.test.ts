@@ -16,11 +16,9 @@ import { isNumber } from "../shared/type-guards.js";
 // ── Mock oauth + tarball (needed to avoid interactive prompts / network) ──
 
 const mockGetOrPromptApiKey = mock(() => Promise.resolve("sk-or-v1-test-key"));
-const mockGetModelIdInteractive = mock(() => Promise.resolve("openrouter/auto"));
 
 mock.module("../shared/oauth", () => ({
   getOrPromptApiKey: mockGetOrPromptApiKey,
-  getModelIdInteractive: mockGetModelIdInteractive,
 }));
 
 // ── Import the real module under test ─────────────────────────────────────
@@ -46,11 +44,17 @@ function createMockCloud(overrides: Partial<CloudOrchestrator> = {}): CloudOrche
     runner: mockRunner,
     authenticate: mock(() => Promise.resolve()),
     promptSize: mock(() => Promise.resolve()),
-    createServer: mock(() => Promise.resolve()),
+    createServer: mock(() =>
+      Promise.resolve({
+        ip: "10.0.0.1",
+        user: "root",
+        server_name: "test-server-1",
+        cloud: "testcloud",
+      }),
+    ),
     getServerName: mock(() => Promise.resolve("test-server-1")),
     waitForReady: mock(() => Promise.resolve()),
     interactiveSession: mock(() => Promise.resolve(0)),
-    saveLaunchCmd: mock(() => {}),
     ...overrides,
   };
 }
@@ -109,8 +113,6 @@ describe("runOrchestration", () => {
     });
     mockGetOrPromptApiKey.mockClear();
     mockGetOrPromptApiKey.mockImplementation(() => Promise.resolve("sk-or-v1-test-key"));
-    mockGetModelIdInteractive.mockClear();
-    mockGetModelIdInteractive.mockImplementation(() => Promise.resolve("openrouter/auto"));
     mockTryTarballInstall.mockClear();
     mockTryTarballInstall.mockImplementation(() => Promise.resolve(false));
   });
@@ -130,6 +132,12 @@ describe("runOrchestration", () => {
       }),
       createServer: mock(async () => {
         callOrder.push("createServer");
+        return {
+          ip: "10.0.0.1",
+          user: "root",
+          server_name: "srv",
+          cloud: "testcloud",
+        };
       }),
       waitForReady: mock(async () => {
         callOrder.push("waitForReady");
@@ -137,9 +145,6 @@ describe("runOrchestration", () => {
       interactiveSession: mock(async () => {
         callOrder.push("interactiveSession");
         return 0;
-      }),
-      saveLaunchCmd: mock(() => {
-        callOrder.push("saveLaunchCmd");
       }),
     });
     const agent = createMockAgent({
@@ -155,8 +160,7 @@ describe("runOrchestration", () => {
     expect(callOrder.indexOf("getServerName")).toBeLessThan(callOrder.indexOf("createServer"));
     expect(callOrder.indexOf("createServer")).toBeLessThan(callOrder.indexOf("waitForReady"));
     expect(callOrder.indexOf("waitForReady")).toBeLessThan(callOrder.indexOf("install"));
-    expect(callOrder.indexOf("install")).toBeLessThan(callOrder.indexOf("saveLaunchCmd"));
-    expect(callOrder.indexOf("saveLaunchCmd")).toBeLessThan(callOrder.indexOf("interactiveSession"));
+    expect(callOrder.indexOf("install")).toBeLessThan(callOrder.indexOf("interactiveSession"));
     stderrSpy.mockRestore();
     exitSpy.mockRestore();
   });
@@ -169,6 +173,31 @@ describe("runOrchestration", () => {
 
     expect(mockGetOrPromptApiKey).toHaveBeenCalledTimes(1);
     expect(mockGetOrPromptApiKey).toHaveBeenCalledWith("testagent", "testcloud");
+    stderrSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it("obtains API key before preProvision (no surprise prompts after cloud auth)", async () => {
+    const callOrder: string[] = [];
+    mockGetOrPromptApiKey.mockImplementation(async () => {
+      callOrder.push("getApiKey");
+      return "sk-or-v1-test-key";
+    });
+    const cloud = createMockCloud({
+      authenticate: mock(async () => {
+        callOrder.push("authenticate");
+      }),
+    });
+    const agent = createMockAgent({
+      preProvision: mock(async () => {
+        callOrder.push("preProvision");
+      }),
+    });
+
+    await runOrchestrationSafe(cloud, agent, "testagent");
+
+    expect(callOrder.indexOf("authenticate")).toBeLessThan(callOrder.indexOf("getApiKey"));
+    expect(callOrder.indexOf("getApiKey")).toBeLessThan(callOrder.indexOf("preProvision"));
     stderrSpy.mockRestore();
     exitSpy.mockRestore();
   });
@@ -258,43 +287,53 @@ describe("runOrchestration", () => {
     exitSpy.mockRestore();
   });
 
-  // ── Model selection ─────────────────────────────────────────────────
+  // ── Model default ──────────────────────────────────────────────────
 
-  it("calls getModelIdInteractive when agent.modelPrompt is true", async () => {
+  it("passes modelDefault to configure without prompting", async () => {
+    const configure = mock(() => Promise.resolve());
     const cloud = createMockCloud();
     const agent = createMockAgent({
-      modelPrompt: true,
       modelDefault: "anthropic/claude-3",
+      configure,
     });
 
     await runOrchestrationSafe(cloud, agent, "testagent");
 
-    expect(mockGetModelIdInteractive).toHaveBeenCalledTimes(1);
-    expect(mockGetModelIdInteractive).toHaveBeenCalledWith("anthropic/claude-3", "TestAgent");
+    expect(configure).toHaveBeenCalledWith("sk-or-v1-test-key", "anthropic/claude-3");
     stderrSpy.mockRestore();
     exitSpy.mockRestore();
   });
 
-  it("uses 'openrouter/auto' as default model when modelDefault is not set", async () => {
+  it("uses MODEL_ID env var when modelDefault is not set", async () => {
+    const originalModelId = process.env.MODEL_ID;
+    process.env.MODEL_ID = "google/gemini-pro";
+    const configure = mock(() => Promise.resolve());
     const cloud = createMockCloud();
     const agent = createMockAgent({
-      modelPrompt: true,
-    }); // no modelDefault
+      configure,
+    });
 
     await runOrchestrationSafe(cloud, agent, "testagent");
 
-    expect(mockGetModelIdInteractive).toHaveBeenCalledWith("openrouter/auto", "TestAgent");
+    expect(configure).toHaveBeenCalledWith("sk-or-v1-test-key", "google/gemini-pro");
+    process.env.MODEL_ID = originalModelId;
     stderrSpy.mockRestore();
     exitSpy.mockRestore();
   });
 
-  it("skips model selection when modelPrompt is falsy", async () => {
+  it("passes undefined modelId when neither modelDefault nor MODEL_ID is set", async () => {
+    const originalModelId = process.env.MODEL_ID;
+    delete process.env.MODEL_ID;
+    const configure = mock(() => Promise.resolve());
     const cloud = createMockCloud();
-    const agent = createMockAgent(); // modelPrompt undefined
+    const agent = createMockAgent({
+      configure,
+    });
 
     await runOrchestrationSafe(cloud, agent, "testagent");
 
-    expect(mockGetModelIdInteractive).not.toHaveBeenCalled();
+    expect(configure).toHaveBeenCalledWith("sk-or-v1-test-key", undefined);
+    process.env.MODEL_ID = originalModelId;
     stderrSpy.mockRestore();
     exitSpy.mockRestore();
   });
@@ -399,24 +438,23 @@ describe("runOrchestration", () => {
     exitSpy.mockRestore();
   });
 
-  // ── saveLaunchCmd ───────────────────────────────────────────────────
+  // ── createServer returns VMConnection ────────────────────────────────
 
-  it("saves the raw launch command (not the restart-wrapped one)", async () => {
-    const saveLaunchCmd = mock(() => {});
+  it("createServer return value is used (VMConnection)", async () => {
     const cloud = createMockCloud({
       cloudName: "hetzner",
-      saveLaunchCmd,
+      createServer: mock(async () => ({
+        ip: "5.5.5.5",
+        user: "root",
+        server_name: "my-hetzner",
+        cloud: "hetzner",
+      })),
     });
-    const agent = createMockAgent({
-      launchCmd: mock(() => "my-agent --start"),
-    });
+    const agent = createMockAgent();
 
     await runOrchestrationSafe(cloud, agent, "testagent");
 
-    expect(saveLaunchCmd).toHaveBeenCalledTimes(1);
-    const args = saveLaunchCmd.mock.calls[0];
-    expect(args[0]).toBe("my-agent --start");
-    expect(typeof args[1]).toBe("string"); // spawnId
+    expect(cloud.createServer).toHaveBeenCalledTimes(1);
     stderrSpy.mockRestore();
     exitSpy.mockRestore();
   });
@@ -507,6 +545,59 @@ describe("runOrchestration", () => {
 
     expect(mockTryTarballInstall).not.toHaveBeenCalled();
     expect(install).toHaveBeenCalledTimes(1);
+    stderrSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  // ── checkAccountReady ──────────────────────────────────────────────
+
+  it("calls checkAccountReady between authenticate and preProvision", async () => {
+    const callOrder: string[] = [];
+    const cloud = createMockCloud({
+      authenticate: mock(async () => {
+        callOrder.push("authenticate");
+      }),
+      checkAccountReady: mock(async () => {
+        callOrder.push("checkAccountReady");
+      }),
+    });
+    const agent = createMockAgent({
+      preProvision: mock(async () => {
+        callOrder.push("preProvision");
+      }),
+    });
+
+    await runOrchestrationSafe(cloud, agent, "testagent");
+
+    expect(callOrder.indexOf("authenticate")).toBeLessThan(callOrder.indexOf("checkAccountReady"));
+    expect(callOrder.indexOf("checkAccountReady")).toBeLessThan(callOrder.indexOf("preProvision"));
+    stderrSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it("continues when checkAccountReady throws (non-fatal)", async () => {
+    const cloud = createMockCloud({
+      checkAccountReady: mock(() => Promise.reject(new Error("billing check failed"))),
+    });
+    const agent = createMockAgent();
+
+    await runOrchestrationSafe(cloud, agent, "testagent");
+
+    // Cloud lifecycle should still proceed despite checkAccountReady failure
+    expect(cloud.createServer).toHaveBeenCalledTimes(1);
+    expect(cloud.interactiveSession).toHaveBeenCalledTimes(1);
+    stderrSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it("skips checkAccountReady when not defined on cloud", async () => {
+    const cloud = createMockCloud(); // no checkAccountReady
+    const agent = createMockAgent();
+
+    await runOrchestrationSafe(cloud, agent, "testagent");
+
+    expect(cloud.authenticate).toHaveBeenCalledTimes(1);
+    expect(cloud.createServer).toHaveBeenCalledTimes(1);
     stderrSpy.mockRestore();
     exitSpy.mockRestore();
   });

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { getErrorMessage } from "./shared/type-guards.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -45,6 +46,7 @@ export interface AgentDef {
 export interface CloudDef {
   name: string;
   description: string;
+  price: string;
   url: string;
   type: string;
   auth: string;
@@ -93,9 +95,7 @@ function cacheAge(): number {
 }
 
 function logError(message: string, err?: unknown): void {
-  // Use duck typing instead of instanceof to avoid prototype chain issues
-  const errMsg = err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
-  console.error(err ? `${message}: ${errMsg}` : message);
+  console.error(err ? `${message}: ${getErrorMessage(err)}` : message);
 }
 
 function readCache(): Manifest | null {

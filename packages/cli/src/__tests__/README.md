@@ -17,7 +17,7 @@ bun test src/__tests__/manifest.test.ts
 ## Test Files
 
 ### Core manifest
-- `manifest.test.ts` — `agentKeys`, `cloudKeys`, `matrixStatus`, `countImplemented`, `loadManifest` (cache/network)
+- `manifest.test.ts` — `agentKeys`, `cloudKeys`, `matrixStatus`, `countImplemented`, `loadManifest` (cache/network), `stripDangerousKeys`
 - `manifest-integrity.test.ts` — Structural validation: script files exist for implemented entries, no orphans
 - `manifest-type-contracts.test.ts` — Field type precision for every agent/cloud in the real manifest
 - `manifest-cache-lifecycle.test.ts` — Cache TTL, expiry, forced refresh
@@ -46,9 +46,7 @@ bun test src/__tests__/manifest.test.ts
 - `run-path-credential-display.test.ts` — `prioritizeCloudsByCredentials`, run-path validation
 
 ### Security
-- `security.test.ts` — `validateIdentifier`, `validateScriptContent`, `validatePrompt` (core cases)
-- `security-edge-cases.test.ts` — Boundary conditions and character-level edge cases
-- `security-encoding.test.ts` — Encoding edge cases, `stripDangerousKeys`
+- `security.test.ts` — `validateIdentifier`, `validateScriptContent`, `validatePrompt` (core, boundary, encoding edge cases)
 - `security-connection-validation.test.ts` — `validateConnectionIP`, `validateUsername`, `validateServerIdentifier`, `validateLaunchCmd`
 - `prompt-file-security.test.ts` — `validatePromptFilePath`, `validatePromptFileStats`
 
@@ -73,10 +71,19 @@ bun test src/__tests__/manifest.test.ts
 
 ### Cloud-specific
 - `aws.test.ts` — AWS credential cache, SigV4 signing helpers
+- `billing-guidance.test.ts` — `isBillingError`, `handleBillingError`, `showNonBillingError`
 - `cloud-init.test.ts` — `getPackagesForTier`, `needsNode`, `needsBun`, `NODE_INSTALL_CMD`
 - `check-entity.test.ts` / `check-entity-messages.test.ts` — Entity validation
 - `agent-tarball.test.ts` — `tryTarballInstall`: GitHub Release tarball install, fallback, URL validation
 - `gateway-resilience.test.ts` — `startGateway` systemd unit with auto-restart and cron heartbeat
+- `do-snapshot.test.ts` — `findSpawnSnapshot`: DigitalOcean snapshot lookup, filtering, error handling
+- `ui-utils.test.ts` — `validateServerName`, `validateRegionName`, `toKebabCase`, `sanitizeTermValue`, `jsonEscape`
+
+### Agent-specific
+- `junie-agent.test.ts` — Junie CLI agent configuration validation
+
+### Shared helpers
+- `shared-helpers.test.ts` — `generateEnvConfig`, `hasStatus`, `toObjectArray`, `toRecord`
 
 ### OAuth and auth
 - `oauth-code-validation.test.ts` — `OAUTH_CODE_REGEX` format validation

@@ -120,6 +120,7 @@ type WriteFn = (s: string) => void;
 
 interface KeyLoopCallbacks<T> {
   fallback: () => T;
+  cancel: () => T;
   init: (w: WriteFn, cols: number) => void;
   handleKey: (
     key: string,
@@ -223,6 +224,7 @@ function withTTYKeyLoop<T>(callbacks: KeyLoopCallbacks<T>): T {
   // ── key loop ────────────────────────────────────────────────────────────
   const buf = Buffer.alloc(8);
   let finalResult: T | undefined;
+  let cancelled = false;
 
   try {
     while (true) {
@@ -238,8 +240,9 @@ function withTTYKeyLoop<T>(callbacks: KeyLoopCallbacks<T>): T {
 
       const key = buf.slice(0, n).toString("binary");
 
-      // Ctrl-C / Escape — universal cancel
+      // Ctrl-C / Escape — explicit user cancel (not a TTY failure)
       if (key === "\x03" || key === "\x1b") {
+        cancelled = true;
         break;
       }
 
@@ -253,7 +256,10 @@ function withTTYKeyLoop<T>(callbacks: KeyLoopCallbacks<T>): T {
     restore();
   }
 
-  return finalResult !== undefined ? finalResult : callbacks.fallback();
+  if (finalResult !== undefined) {
+    return finalResult;
+  }
+  return cancelled ? callbacks.cancel() : callbacks.fallback();
 }
 
 // ── TTY picker ────────────────────────────────────────────────────────────────
@@ -316,6 +322,7 @@ export function pickToTTYWithActions(config: PickConfig): PickResult {
 
   return withTTYKeyLoop<PickResult>({
     fallback,
+    cancel: () => cancel,
 
     init(w, cols) {
       maxW = cols - 1;
@@ -324,7 +331,9 @@ export function pickToTTYWithActions(config: PickConfig): PickResult {
         : "\u2191/\u2193 move  \u23ce select  Ctrl-C cancel";
 
       const linesPerOption = config.options.map((o) => (o.subtitle ? 2 : 1));
-      pickerHeight = 1 + linesPerOption.reduce((a, b) => a + b, 0) + 1;
+      // Add 1 blank separator line between each pair of adjacent options
+      const separatorCount = config.options.length > 1 ? config.options.length - 1 : 0;
+      pickerHeight = 1 + linesPerOption.reduce((a, b) => a + b, 0) + separatorCount + 1;
 
       render = (wr: WriteFn, first: boolean) => {
         if (!first) {
@@ -347,10 +356,14 @@ export function pickToTTYWithActions(config: PickConfig): PickResult {
               wr(`  ${A.dim}${trunc(opt.subtitle, maxW - 2)}${A.reset}\r\n`);
             }
           } else {
-            wr(`  ${A.dim}${trunc(opt.label, maxW - 2)}${A.reset}\r\n`);
+            wr(`  ${trunc(opt.label, maxW - 2)}\r\n`);
             if (opt.subtitle) {
               wr(`  ${A.dim}${trunc(opt.subtitle, maxW - 2)}${A.reset}\r\n`);
             }
+          }
+          // Blank separator between entries for visual clarity
+          if (i < config.options.length - 1) {
+            wr("\r\n");
           }
         }
         wr(`${A.dim}  ${trunc(footerHint, maxW - 2)}${A.reset}\r\n`);
@@ -409,146 +422,6 @@ export function pickToTTYWithActions(config: PickConfig): PickResult {
         case "\x1bOB":
         case "j":
           selected = (selected + 1) % config.options.length;
-          render(w, false);
-          return {
-            done: false,
-          };
-
-        default:
-          return {
-            done: false,
-          };
-      }
-    },
-  });
-}
-
-// ── TTY multi-select picker ──────────────────────────────────────────────────
-
-export interface MultiPickOption {
-  value: string;
-  label: string;
-  hint?: string;
-  selected?: boolean;
-}
-
-export interface MultiPickConfig {
-  message: string;
-  options: MultiPickOption[];
-  /** Minimum number of selections required. Default 1. */
-  minRequired?: number;
-}
-
-/**
- * Multi-select picker that reads directly from /dev/tty.
- * Bypasses process.stdin entirely — works even when stdin is shared
- * with a parent process (e.g., child bun spawned from CLI bun).
- *
- * Returns an array of selected values, or null on cancel.
- */
-export function multiPickToTTY(config: MultiPickConfig): string[] | null {
-  if (config.options.length === 0) {
-    return [];
-  }
-
-  const multiFallback = (): string[] | null => config.options.filter((o) => o.selected !== false).map((o) => o.value);
-
-  let cursor = 0;
-  const checked: boolean[] = config.options.map((o) => o.selected !== false);
-
-  let maxW = 80;
-  let pickerHeight = 0;
-  let render: (w: WriteFn, first: boolean) => void;
-
-  return withTTYKeyLoop<string[] | null>({
-    fallback: multiFallback,
-
-    init(w, cols) {
-      maxW = cols - 1;
-      const footerHint = "\u2191/\u2193 move  space toggle  \u23ce confirm  Ctrl-C cancel";
-      pickerHeight = 1 + config.options.length + 1;
-
-      render = (wr: WriteFn, first: boolean) => {
-        if (!first) {
-          wr(A.up(pickerHeight) + A.col1 + A.clearBelow);
-        }
-        wr(`${A.bold}${A.cyan}? ${trunc(config.message, maxW - 2)}${A.reset}\r\n`);
-        for (let i = 0; i < config.options.length; i++) {
-          const opt = config.options[i];
-          const box = checked[i] ? "\u25a0" : "\u25a1";
-          if (i === cursor) {
-            const label = trunc(opt.label, maxW - 6);
-            wr(`${A.green}${A.bold}> ${box} ${label}${A.reset}`);
-            if (opt.hint) {
-              const remaining = maxW - 6 - label.length - 2;
-              if (remaining > 3) {
-                wr(`  ${A.dim}${trunc(opt.hint, remaining)}${A.reset}`);
-              }
-            }
-          } else {
-            wr(`  ${A.dim}${box} ${trunc(opt.label, maxW - 4)}${A.reset}`);
-          }
-          wr("\r\n");
-        }
-        wr(`${A.dim}  ${trunc(footerHint, maxW - 2)}${A.reset}\r\n`);
-      };
-
-      render(w, true);
-    },
-
-    handleKey(key, w) {
-      switch (key) {
-        case "\r":
-        case "\n": {
-          const selected = config.options.filter((_, i) => checked[i]).map((o) => o.value);
-          const minRequired = config.minRequired ?? 1;
-          if (selected.length < minRequired) {
-            return {
-              done: false,
-            };
-          }
-          w(A.up(pickerHeight) + A.col1 + A.clearBelow);
-          const summary = selected.length === config.options.length ? "all" : selected.join(", ");
-          w(
-            `${A.green}${A.bold}> ${config.message}:${A.reset} ${A.cyan}${trunc(summary, maxW - config.message.length - 4)}${A.reset}\r\n`,
-          );
-          return {
-            done: true,
-            result: selected,
-          };
-        }
-
-        case " ":
-          checked[cursor] = !checked[cursor];
-          render(w, false);
-          return {
-            done: false,
-          };
-
-        case "a": {
-          const allChecked = checked.every((c) => c);
-          for (let i = 0; i < checked.length; i++) {
-            checked[i] = !allChecked;
-          }
-          render(w, false);
-          return {
-            done: false,
-          };
-        }
-
-        case "\x1b[A":
-        case "\x1bOA":
-        case "k":
-          cursor = (cursor - 1 + config.options.length) % config.options.length;
-          render(w, false);
-          return {
-            done: false,
-          };
-
-        case "\x1b[B":
-        case "\x1bOB":
-        case "j":
-          cursor = (cursor + 1) % config.options.length;
           render(w, false);
           return {
             done: false,

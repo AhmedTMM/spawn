@@ -9,9 +9,7 @@ export type CloudInitTier = "minimal" | "node" | "bun" | "full";
 
 export interface AgentConfig {
   name: string;
-  /** If true, prompt for model selection before provisioning. */
-  modelPrompt?: boolean;
-  /** Default model ID when modelPrompt is true. */
+  /** Default model ID passed to configure() (no interactive prompt — override via MODEL_ID env var). */
   modelDefault?: string;
   /** Pre-provision hook (runs before server creation, e.g., prompt for GitHub auth). */
   preProvision?: () => Promise<void>;
@@ -29,11 +27,6 @@ export interface AgentConfig {
   launchCmd: () => string;
   /** Cloud-init dependency tier. Defaults to "full" if unset. */
   cloudInitTier?: CloudInitTier;
-  /** Docker image for pre-built agent extraction (e.g. "ghcr.io/openrouterteam/spawn-claude:latest"). */
-  dockerImage?: string;
-  /** If true, Docker + image pull are added to cloud-init for faster extraction.
-   *  Only worth it for agents with slow installs (e.g. Rust compilation). */
-  slowInstall?: boolean;
   /** Skip tarball install attempt (e.g., already using snapshot). */
   skipTarball?: boolean;
 }
@@ -49,6 +42,8 @@ export function generateEnvConfig(pairs: string[]): string {
     "",
     "# [spawn:env]",
     "export IS_SANDBOX='1'",
+    "# Ensure agent binaries are in PATH on reconnect",
+    'export PATH="$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.claude/local/bin:$PATH"',
   ];
   for (const pair of pairs) {
     const eqIdx = pair.indexOf("=");

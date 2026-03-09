@@ -1,4 +1,4 @@
-// Barrel re-export — keeps all existing `import { ... } from "./commands.js"` working.
+// Barrel re-export — all command modules re-exported from this index.
 
 // run.ts — cmdRun, cmdRunHeadless, script failure guidance
 export type { HeadlessOptions } from "./run.js";
@@ -62,5 +62,7 @@ export {
   resolveCloudKey,
   resolveDisplayName,
 } from "./shared.js";
+// status.ts — cmdStatus
+export { cmdStatus } from "./status.js";
 // update.ts — cmdUpdate
 export { cmdUpdate } from "./update.js";

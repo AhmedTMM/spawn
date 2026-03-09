@@ -11,12 +11,28 @@ if [ -z "${AGENT_NAME}" ]; then
   exit 1
 fi
 
+# Validate agent name against allowed list to prevent injection
+case "${AGENT_NAME}" in
+  openclaw|codex|kilocode|claude|opencode|zeroclaw|hermes) ;;
+  *)
+    printf 'Error: Invalid agent name: %s\nAllowed: openclaw, codex, kilocode, claude, opencode, zeroclaw, hermes\n' "${AGENT_NAME}" >&2
+    exit 1
+    ;;
+esac
+
 PATHS_FILE="/tmp/spawn-tarball-paths.txt"
 : > "${PATHS_FILE}"
 
 # Map agent -> filesystem paths to capture (all relative to /)
 case "${AGENT_NAME}" in
-  openclaw|codex|kilocode)
+  openclaw)
+    echo "/root/.npm-global/" >> "${PATHS_FILE}"
+    # Google Chrome for OpenClaw's browser tool (CDP automation)
+    echo "/usr/bin/google-chrome-stable" >> "${PATHS_FILE}"
+    echo "/usr/bin/google-chrome" >> "${PATHS_FILE}"
+    echo "/opt/google/chrome/" >> "${PATHS_FILE}"
+    ;;
+  codex|kilocode)
     echo "/root/.npm-global/" >> "${PATHS_FILE}"
     ;;
   claude)
@@ -34,6 +50,9 @@ case "${AGENT_NAME}" in
   hermes)
     echo "/root/.local/bin/hermes" >> "${PATHS_FILE}"
     echo "/root/.local/share/" >> "${PATHS_FILE}"
+    # The hermes installer (uv tool) creates the actual binary + venv under ~/.hermes/.
+    # Without this, the ~/.local/bin/hermes symlink is dangling after tarball extraction.
+    echo "/root/.hermes/" >> "${PATHS_FILE}"
     ;;
   *)
     echo "Unknown agent: ${AGENT_NAME}" >&2

@@ -4,11 +4,11 @@ import type { Manifest } from "../manifest.js";
 import * as fs from "node:fs";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
-import * as v from "valibot";
 import pkg from "../../package.json" with { type: "json" };
 import { agentKeys, cloudKeys, isStaleCache, loadManifest, matrixStatus } from "../manifest.js";
 import { validateIdentifier, validatePrompt } from "../security.js";
-import { isString } from "../shared/type-guards.js";
+import { PkgVersionSchema } from "../shared/parse.js";
+import { getErrorMessage, isString } from "../shared/type-guards.js";
 import { getSpawnCloudConfigPath } from "../shared/ui.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -17,16 +17,11 @@ export const VERSION = pkg.version;
 export const FETCH_TIMEOUT = 10_000; // 10 seconds
 export const NAME_COLUMN_WIDTH = 18;
 
-export const PkgVersionSchema = v.object({
-  version: v.string(),
-});
+export { PkgVersionSchema };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-export function getErrorMessage(err: unknown): string {
-  // Use duck typing instead of instanceof to avoid prototype chain issues
-  return err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
-}
+export { getErrorMessage };
 
 export function handleCancel(): never {
   p.outro(pc.dim("Cancelled."));
@@ -211,11 +206,11 @@ export const ENTITY_DEFS: Record<"agent" | "cloud", EntityDef> = {
   },
 };
 
-export function getEntityCollection(manifest: Manifest, kind: "agent" | "cloud") {
+function getEntityCollection(manifest: Manifest, kind: "agent" | "cloud") {
   return kind === "agent" ? manifest.agents : manifest.clouds;
 }
 
-export function getEntityKeys(manifest: Manifest, kind: "agent" | "cloud") {
+function getEntityKeys(manifest: Manifest, kind: "agent" | "cloud") {
   return kind === "agent" ? agentKeys(manifest) : cloudKeys(manifest);
 }
 
@@ -430,13 +425,16 @@ export function prioritizeCloudsByCredentials(
 
   const hintOverrides: Record<string, string> = {};
   for (const c of withCreds) {
-    hintOverrides[c] = `credentials detected -- ${manifest.clouds[c].description}`;
+    hintOverrides[c] = `${manifest.clouds[c].price ?? ""} — credentials detected`;
   }
   for (const c of featured) {
-    hintOverrides[c] = `recommended -- ${manifest.clouds[c].description}`;
+    hintOverrides[c] = `${manifest.clouds[c].price ?? ""} — recommended`;
   }
   for (const c of withCli) {
-    hintOverrides[c] = `CLI installed -- ${manifest.clouds[c].description}`;
+    hintOverrides[c] = `${manifest.clouds[c].price ?? ""} — CLI installed`;
+  }
+  for (const c of rest) {
+    hintOverrides[c] = `${manifest.clouds[c].price ?? ""} — ${manifest.clouds[c].description}`;
   }
 
   return {
@@ -481,7 +479,7 @@ export function parseAuthEnvVars(auth: string): string[] {
 }
 
 /** Format an auth env var line showing whether it's already set or needs to be exported */
-export function formatAuthVarLine(varName: string, urlHint?: string): string {
+function formatAuthVarLine(varName: string, urlHint?: string): string {
   if (process.env[varName]) {
     return `  ${pc.green(varName)} ${pc.dim("-- set")}`;
   }
@@ -508,7 +506,7 @@ export function formatCredStatusLine(varName: string, urlHint?: string): string 
 }
 
 /** Check if credentials are saved in ~/.config/spawn/{cloud}.json */
-export function hasCloudConfigCredentials(cloud: string): boolean {
+function hasCloudConfigCredentials(cloud: string): boolean {
   try {
     const configPath = getSpawnCloudConfigPath(cloud);
     if (!fs.existsSync(configPath)) {
@@ -543,22 +541,11 @@ export function collectMissingCredentials(authVars: string[], cloud?: string): s
   return missing;
 }
 
-export function getCredentialGuidance(cloud: string, onlyOpenRouter: boolean): string {
+function getCredentialGuidance(cloud: string, onlyOpenRouter: boolean): string {
   if (onlyOpenRouter) {
     return "The script will open your browser to authenticate with OpenRouter.";
   }
   return `Run ${pc.cyan(`spawn ${cloud}`)} for setup instructions.`;
-}
-
-export async function confirmContinueWithMissingCreds(onlyOpenRouter: boolean): Promise<boolean> {
-  const confirmMsg = onlyOpenRouter
-    ? "Continue? You'll authenticate via browser."
-    : "Continue anyway? The script will prompt for missing credentials.";
-  const shouldContinue = await p.confirm({
-    message: confirmMsg,
-    initialValue: true,
-  });
-  return !p.isCancel(shouldContinue) && shouldContinue;
 }
 
 export async function preflightCredentialCheck(manifest: Manifest, cloud: string): Promise<void> {
@@ -579,12 +566,8 @@ export async function preflightCredentialCheck(manifest: Manifest, cloud: string
   const onlyOpenRouter = missing.length === 1 && missing[0] === "OPENROUTER_API_KEY";
   p.log.info(getCredentialGuidance(cloud, onlyOpenRouter));
 
-  if (isInteractiveTTY()) {
-    const shouldContinue = await confirmContinueWithMissingCreds(onlyOpenRouter);
-    if (!shouldContinue) {
-      handleCancel();
-    }
-  }
+  // No confirmation needed — the warning + guidance above is sufficient.
+  // The orchestration pipeline will prompt for credentials as needed.
 }
 
 /** Build auth hint string from cloud auth field for error messages */
@@ -708,13 +691,13 @@ export function printGroupedList(
   }
 }
 
-export function checkAllCredentialsReady(auth: string): boolean {
+function checkAllCredentialsReady(auth: string): boolean {
   const hasCreds = hasCloudCredentials(auth);
   const hasOpenRouterKey = !!process.env.OPENROUTER_API_KEY;
   return hasOpenRouterKey && (hasCreds || auth.toLowerCase() === "none");
 }
 
-export function printAuthVariableStatus(authVars: string[], cloudUrl?: string): void {
+function printAuthVariableStatus(authVars: string[], cloudUrl?: string): void {
   console.log(formatAuthVarLine("OPENROUTER_API_KEY", "https://openrouter.ai/settings/keys"));
   for (let i = 0; i < authVars.length; i++) {
     console.log(formatAuthVarLine(authVars[i], i === 0 ? cloudUrl : undefined));

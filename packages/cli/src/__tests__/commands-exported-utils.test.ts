@@ -8,7 +8,7 @@ import {
   getMissingClouds,
   getTerminalWidth,
   parseAuthEnvVars,
-} from "../commands";
+} from "../commands/index.js";
 import { createEmptyManifest, createMockManifest } from "./test-helpers";
 
 /**
@@ -218,6 +218,7 @@ describe("getImplementedAgents", () => {
         newcloud: {
           name: "New Cloud",
           description: "Test",
+          price: "test",
           url: "",
           type: "vm",
           auth: "token",

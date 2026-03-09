@@ -1,9 +1,12 @@
 // shared/oauth.ts — OpenRouter OAuth flow + API key management
 
+import { mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import * as v from "valibot";
 import { OAUTH_CODE_REGEX } from "./oauth-constants";
 import { parseJsonWith } from "./parse";
-import { logError, logInfo, logStep, logWarn, openBrowser, prompt, validateModelId } from "./ui";
+import { isString } from "./type-guards";
+import { getSpawnCloudConfigPath, logError, logInfo, logStep, logWarn, openBrowser, prompt } from "./ui";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
@@ -13,7 +16,7 @@ const OAuthKeySchema = v.object({
 
 // ─── Key Validation ──────────────────────────────────────────────────────────
 
-export async function verifyOpenrouterKey(apiKey: string): Promise<boolean> {
+async function verifyOpenrouterKey(apiKey: string): Promise<boolean> {
   if (!apiKey) {
     return false;
   }
@@ -50,7 +53,7 @@ function generateCsrfState(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-const OAUTH_CSS =
+export const OAUTH_CSS =
   "*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#fff;color:#090a0b}@media(prefers-color-scheme:dark){body{background:#090a0b;color:#fafafa}}.card{text-align:center;max-width:400px;padding:2rem}.icon{font-size:2.5rem;margin-bottom:1rem}h1{font-size:1.25rem;font-weight:600;margin-bottom:.5rem}p{font-size:.875rem;color:#6b7280}@media(prefers-color-scheme:dark){p{color:#9ca3af}}";
 
 const SUCCESS_HTML = `<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${OAUTH_CSS}</style></head><body><div class="card"><div class="icon">&#10003;</div><h1>Authentication Successful</h1><p>You can close this tab and return to your terminal.</p></div><script>setTimeout(function(){try{window.close()}catch(e){}},3000)</script></body></html>`;
@@ -211,6 +214,49 @@ async function tryOauthFlow(callbackPort = 5180, agentSlug?: string, cloudSlug?:
   }
 }
 
+// ─── API Key Persistence ─────────────────────────────────────────────────────
+
+/** Save OpenRouter API key to ~/.config/spawn/openrouter.json so it persists across runs. */
+async function saveOpenRouterKey(key: string): Promise<void> {
+  try {
+    const configPath = getSpawnCloudConfigPath("openrouter");
+    mkdirSync(dirname(configPath), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await Bun.write(
+      configPath,
+      JSON.stringify(
+        {
+          api_key: key,
+        },
+        null,
+        2,
+      ) + "\n",
+      {
+        mode: 0o600,
+      },
+    );
+  } catch {
+    // non-fatal — key still works in memory for this session
+  }
+}
+
+/** Load a previously saved OpenRouter API key from ~/.config/spawn/openrouter.json. */
+function loadSavedOpenRouterKey(): string | null {
+  try {
+    const configPath = getSpawnCloudConfigPath("openrouter");
+    const data = JSON.parse(readFileSync(configPath, "utf-8"));
+    const key = isString(data.api_key) ? data.api_key : "";
+    if (key && /^sk-or-v1-[a-f0-9]{64}$/.test(key)) {
+      return key;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Main API Key Acquisition ────────────────────────────────────────────────
 
 async function promptAndValidateApiKey(): Promise<string | null> {
@@ -249,74 +295,41 @@ export async function getOrPromptApiKey(agentSlug?: string, cloudSlug?: string):
     logWarn("Environment key failed validation, prompting for a new one...");
   }
 
-  // 2. Try OAuth + manual fallback (3 attempts)
+  // 2. Check saved key from previous session
+  const savedKey = loadSavedOpenRouterKey();
+  if (savedKey) {
+    logInfo("Using saved OpenRouter API key");
+    if (await verifyOpenrouterKey(savedKey)) {
+      process.env.OPENROUTER_API_KEY = savedKey;
+      return savedKey;
+    }
+    logWarn("Saved key failed validation, prompting for a new one...");
+  }
+
+  // 3. Try OAuth + manual fallback (3 attempts)
   for (let attempt = 1; attempt <= 3; attempt++) {
     // Try OAuth first
     const key = await tryOauthFlow(5180, agentSlug, cloudSlug);
     if (key && (await verifyOpenrouterKey(key))) {
       process.env.OPENROUTER_API_KEY = key;
+      await saveOpenRouterKey(key);
       return key;
     }
 
-    // OAuth failed, offer manual entry
+    // OAuth failed — fall through to manual entry
     process.stderr.write("\n");
-    logWarn("Browser-based OAuth login was not completed.");
-    logInfo("You can paste an API key instead. Create one at: https://openrouter.ai/settings/keys");
-    process.stderr.write("\n");
-
-    const choice = await prompt("Paste your API key manually? (Y/n): ");
-    if (/^[Nn]$/.test(choice)) {
-      logError("Authentication cancelled. An OpenRouter API key is required.");
-      throw new Error("No API key");
-    }
-
-    process.stderr.write("\n");
-    logInfo("Manual API Key Entry");
+    logWarn("Browser-based login was not completed.");
     logInfo("Get your API key from: https://openrouter.ai/settings/keys");
     process.stderr.write("\n");
 
     const manualKey = await promptAndValidateApiKey();
     if (manualKey && (await verifyOpenrouterKey(manualKey))) {
       process.env.OPENROUTER_API_KEY = manualKey;
+      await saveOpenRouterKey(manualKey);
       return manualKey;
     }
   }
 
   logError("No valid API key after 3 attempts");
   throw new Error("API key acquisition failed");
-}
-
-// ─── Model Selection ─────────────────────────────────────────────────────────
-
-export async function getModelIdInteractive(defaultModel = "openrouter/auto", agentName?: string): Promise<string> {
-  // Check env var first
-  if (process.env.MODEL_ID) {
-    if (!validateModelId(process.env.MODEL_ID)) {
-      logError("MODEL_ID environment variable contains invalid characters");
-      throw new Error("Invalid MODEL_ID");
-    }
-    return process.env.MODEL_ID;
-  }
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    process.stderr.write("\n");
-    logInfo("Browse models at: https://openrouter.ai/models");
-    if (agentName) {
-      logInfo(`Which model would you like to use with ${agentName}?`);
-    } else {
-      logInfo("Which model would you like to use?");
-    }
-
-    const modelId = (await prompt(`Enter model ID [${defaultModel}]: `)) || defaultModel;
-
-    if (!validateModelId(modelId)) {
-      logError("Invalid characters in model ID, try again");
-      continue;
-    }
-
-    return modelId;
-  }
-
-  logError("No valid model after 3 attempts");
-  throw new Error("Model selection failed");
 }

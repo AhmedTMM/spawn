@@ -15,10 +15,12 @@ export function hasStatus(err: unknown): err is {
   return err !== null && typeof err === "object" && "status" in err && typeof err.status === "number";
 }
 
-export function hasMessage(err: unknown): err is {
-  message: string;
-} {
-  return err !== null && typeof err === "object" && "message" in err && typeof err.message === "string";
+/**
+ * Extract a human-readable error message from an unknown caught value.
+ * Uses duck-typing instead of instanceof to avoid prototype chain issues.
+ */
+export function getErrorMessage(err: unknown): string {
+  return err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
 }
 
 /**

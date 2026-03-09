@@ -18,22 +18,23 @@ import {
   cmdPick,
   cmdRun,
   cmdRunHeadless,
+  cmdStatus,
   cmdUpdate,
   findClosestKeyByNameOrKey,
   isInteractiveTTY,
   loadManifestWithSpinner,
   resolveAgentKey,
   resolveCloudKey,
-} from "./commands.js";
+} from "./commands/index.js";
 import { expandEqualsFlags, findUnknownFlag } from "./flags.js";
 import { agentKeys, cloudKeys, getCacheAge, loadManifest } from "./manifest.js";
+import { getErrorMessage } from "./shared/type-guards.js";
 import { checkForUpdates } from "./update-check.js";
 
 const VERSION = pkg.version;
 
 function handleError(err: unknown): never {
-  // Use duck typing instead of instanceof to avoid prototype chain issues
-  const msg = err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
+  const msg = getErrorMessage(err);
   console.error(pc.red(`Error: ${msg}`));
   console.error(`\nRun ${pc.cyan("spawn help")} for usage information.`);
   process.exit(1);
@@ -95,7 +96,7 @@ function checkUnknownFlags(args: string[]): void {
     console.error(`    ${pc.cyan("--output json")}       Output structured JSON to stdout`);
     console.error(`    ${pc.cyan("--custom")}            Show interactive size/region pickers`);
     console.error(`    ${pc.cyan("--zone, --region")}    Set zone/region (e.g. us-east1-b, nyc3)`);
-    console.error(`    ${pc.cyan("--size, --machine-type")}  Set instance size (e.g. e2-standard-4, s-2vcpu-4gb)`);
+    console.error(`    ${pc.cyan("--size, --machine-type")}  Set instance size (e.g. e2-standard-4, s-2vcpu-2gb)`);
     console.error(`    ${pc.cyan("--name")}              Set the spawn/resource name`);
     console.error(`    ${pc.cyan("--reauth")}            Force re-prompting for cloud credentials`);
     console.error(`    ${pc.cyan("--help, -h")}          Show help information`);
@@ -301,8 +302,7 @@ function handlePromptFileError(promptFile: string, err: unknown): never {
     console.error(pc.red(`'${promptFile}' is a directory, not a file.`));
     console.error("\nProvide a path to a text file containing your prompt.");
   } else {
-    const msg = err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
-    console.error(pc.red(`Error reading prompt file '${promptFile}': ${msg}`));
+    console.error(pc.red(`Error reading prompt file '${promptFile}': ${getErrorMessage(err)}`));
   }
   process.exit(1);
 }
@@ -315,8 +315,7 @@ async function readPromptFile(promptFile: string): Promise<string> {
   try {
     validatePromptFilePath(promptFile);
   } catch (err) {
-    const msg = err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
-    console.error(pc.red(msg));
+    console.error(pc.red(getErrorMessage(err)));
     process.exit(1);
   }
 
@@ -328,8 +327,7 @@ async function readPromptFile(promptFile: string): Promise<string> {
     if (code === "ENOENT" || code === "EACCES" || code === "EISDIR") {
       handlePromptFileError(promptFile, err);
     }
-    const msg = err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
-    console.error(pc.red(msg));
+    console.error(pc.red(getErrorMessage(err)));
     process.exit(1);
   }
 
@@ -482,6 +480,12 @@ const DELETE_COMMANDS = new Set([
   "kill",
 ]);
 
+// status handled separately for --prune/--json flag parsing
+const STATUS_COMMANDS = new Set([
+  "status",
+  "ps",
+]);
+
 // Common verb prefixes that users naturally try (e.g. "spawn run claude sprite")
 // These are not real subcommands -- we strip them and forward to the default handler
 const VERB_ALIASES = new Set([
@@ -573,6 +577,24 @@ async function dispatchDeleteCommand(filteredArgs: string[]): Promise<void> {
   await cmdDelete(agentFilter, cloudFilter);
 }
 
+/** Handle status/ps commands with --prune and --json flags */
+async function dispatchStatusCommand(filteredArgs: string[]): Promise<void> {
+  if (hasTrailingHelpFlag(filteredArgs)) {
+    cmdHelp();
+    return;
+  }
+  const args = filteredArgs.slice(1);
+  const prune = args.includes("--prune");
+  const json = args.includes("--json");
+  const { agentFilter, cloudFilter } = parseListFilters(args);
+  await cmdStatus({
+    prune,
+    json,
+    agentFilter,
+    cloudFilter,
+  });
+}
+
 /** Handle named subcommands (agents, clouds, matrix, etc.) */
 async function dispatchSubcommand(cmd: string, filteredArgs: string[]): Promise<void> {
   if (hasTrailingHelpFlag(filteredArgs)) {
@@ -659,6 +681,10 @@ async function dispatchCommand(
   }
   if (DELETE_COMMANDS.has(cmd)) {
     await dispatchDeleteCommand(filteredArgs);
+    return;
+  }
+  if (STATUS_COMMANDS.has(cmd)) {
+    await dispatchStatusCommand(filteredArgs);
     return;
   }
   if (SUBCOMMANDS[cmd]) {
@@ -872,12 +898,11 @@ async function main(): Promise<void> {
     }
   } catch (err) {
     if (effectiveHeadless && outputFormat === "json") {
-      const msg = err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
       console.log(
         JSON.stringify({
           status: "error",
           error_code: "UNEXPECTED_ERROR",
-          error_message: msg,
+          error_message: getErrorMessage(err),
         }),
       );
       process.exit(1);

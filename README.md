@@ -2,7 +2,7 @@
 
 Launch any AI agent on any cloud with a single command. Coding agents, research agents, self-hosted AI tools — Spawn deploys them all. All models powered by [OpenRouter](https://openrouter.ai). (ALPHA software, use at your own risk!)
 
-**7 agents. 7 clouds. 49 working combinations. Zero config.**
+**8 agents. 6 clouds. 48 working combinations. Zero config.**
 
 ## Install
 
@@ -66,6 +66,10 @@ spawn delete -c hetzner                  # Delete a server on Hetzner
 | `spawn delete` | Interactively select and destroy a cloud server |
 | `spawn delete -a <agent>` | Filter servers to delete by agent |
 | `spawn delete -c <cloud>` | Filter servers to delete by cloud |
+| `spawn status` | Show live state of cloud servers |
+| `spawn status -a <agent>` | Filter status by agent |
+| `spawn status -c <cloud>` | Filter status by cloud |
+| `spawn status --prune` | Remove gone servers from history |
 | `spawn help` | Show help message |
 | `spawn version` | Show version |
 
@@ -164,15 +168,16 @@ If an agent fails to install or launch on a cloud:
 
 ## Matrix
 
-| | [Local Machine](sh/local/) | [Hetzner Cloud](sh/hetzner/) | [AWS Lightsail](sh/aws/) | [Daytona](sh/daytona/) | [DigitalOcean](sh/digitalocean/) | [GCP Compute Engine](sh/gcp/) | [Sprite](sh/sprite/) |
-|---|---|---|---|---|---|---|---|
-| [**Claude Code**](https://claude.ai) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [**OpenClaw**](https://github.com/openclaw/openclaw) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [**ZeroClaw**](https://github.com/zeroclaw-labs/zeroclaw) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [**Codex CLI**](https://github.com/openai/codex) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [**OpenCode**](https://github.com/sst/opencode) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [**Kilo Code**](https://github.com/Kilo-Org/kilocode) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [**Hermes Agent**](https://github.com/NousResearch/hermes-agent) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| | [Local Machine](sh/local/) | [Hetzner Cloud](sh/hetzner/) | [AWS Lightsail](sh/aws/) | [DigitalOcean](sh/digitalocean/) | [GCP Compute Engine](sh/gcp/) | [Sprite](sh/sprite/) |
+|---|---|---|---|---|---|---|
+| [**Claude Code**](https://claude.ai) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [**OpenClaw**](https://github.com/openclaw/openclaw) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [**ZeroClaw**](https://github.com/zeroclaw-labs/zeroclaw) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [**Codex CLI**](https://github.com/openai/codex) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [**OpenCode**](https://github.com/sst/opencode) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [**Kilo Code**](https://github.com/Kilo-Org/kilocode) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [**Hermes Agent**](https://github.com/NousResearch/hermes-agent) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [**Junie**](https://www.jetbrains.com/junie/) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ### How it works
 

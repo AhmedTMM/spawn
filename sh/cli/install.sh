@@ -2,12 +2,12 @@
 # Installer for the spawn CLI
 #
 # Usage:
-#   curl -fsSL https://openrouter.ai/labs/spawn/cli/install.sh | bash
+#   curl -fsSL --proto '=https' https://openrouter.ai/labs/spawn/cli/install.sh | bash
 #
 # This installs spawn via bun. If bun is not available, it auto-installs it first.
 #
 # Override install directory:
-#   SPAWN_INSTALL_DIR=/usr/local/bin curl -fsSL ... | bash
+#   SPAWN_INSTALL_DIR=/usr/local/bin curl -fsSL --proto '=https' ... | bash
 
 set -eo pipefail
 
@@ -63,7 +63,7 @@ ensure_min_bun_version() {
             echo "  bun upgrade"
             echo ""
             echo "Then re-run:"
-            echo "  curl -fsSL ${SPAWN_CDN}/cli/install.sh | bash"
+            echo "  curl -fsSL --proto '=https' ${SPAWN_CDN}/cli/install.sh | bash"
             exit 1
         fi
         log_info "bun upgraded to ${current}"
@@ -205,6 +205,15 @@ build_and_install() {
         exit 1
     fi
 
+    if [ -n "${SPAWN_INSTALL_DIR:-}" ]; then
+        case "${SPAWN_INSTALL_DIR}" in
+            /*) ;;  # absolute path OK
+            *) log_error "SPAWN_INSTALL_DIR must be an absolute path"; exit 1 ;;
+        esac
+        case "${SPAWN_INSTALL_DIR}" in
+            *..*) log_error "SPAWN_INSTALL_DIR must not contain .. path components"; exit 1 ;;
+        esac
+    fi
     INSTALL_DIR="${SPAWN_INSTALL_DIR:-${HOME}/.local/bin}"
     mkdir -p "${INSTALL_DIR}"
     cp "${tmpdir}/cli.js" "${INSTALL_DIR}/spawn"
@@ -225,7 +234,7 @@ export PATH="${BUN_INSTALL}/bin:${HOME}/.local/bin:${PATH}"
 
 if ! command -v bun &>/dev/null; then
     log_step "bun not found. Installing bun..."
-    curl -fsSL --proto '=https' https://bun.sh/install | bash
+    curl -fsSL --proto '=https' https://bun.sh/install?version=1.3.9 | bash
 
     # Re-export so bun is available in this session immediately.
     # Use hard-coded paths alongside BUN_INSTALL — the bun installer may
@@ -236,10 +245,10 @@ if ! command -v bun &>/dev/null; then
         log_error "Failed to install bun automatically"
         echo ""
         echo "Please install bun manually:"
-        echo "  curl -fsSL https://bun.sh/install | bash"
+        echo "  curl -fsSL --proto '=https' https://bun.sh/install?version=1.3.9 | bash"
         echo ""
         echo "Then reopen your terminal and re-run:"
-        echo "  curl -fsSL ${SPAWN_CDN}/cli/install.sh | bash"
+        echo "  curl -fsSL --proto '=https' ${SPAWN_CDN}/cli/install.sh | bash"
         exit 1
     fi
 

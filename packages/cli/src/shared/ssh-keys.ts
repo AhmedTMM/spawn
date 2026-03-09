@@ -3,7 +3,6 @@
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { multiPickToTTY } from "../picker";
 import { logInfo, logStep } from "./ui";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -125,6 +124,20 @@ export function generateSshKey(): SshKeyPair {
     mode: 0o700,
   });
 
+  // If the key already exists (e.g. another concurrent process generated it),
+  // reuse it instead of failing. ssh-keygen prompts for overwrite on stdin,
+  // which fails when stdin is "ignore".
+  if (existsSync(privPath) && existsSync(pubPath)) {
+    logInfo("SSH key already exists, reusing");
+    const keyType = getKeyType(pubPath);
+    return {
+      privPath,
+      pubPath,
+      name: "id_ed25519",
+      type: keyType,
+    };
+  }
+
   logStep("Generating SSH key...");
   const result = Bun.spawnSync(
     [
@@ -147,6 +160,18 @@ export function generateSshKey(): SshKeyPair {
     },
   );
   if (result.exitCode !== 0) {
+    // Another process may have created the key between our check and ssh-keygen.
+    // Re-check before throwing.
+    if (existsSync(privPath) && existsSync(pubPath)) {
+      logInfo("SSH key created by another process, reusing");
+      const keyType = getKeyType(pubPath);
+      return {
+        privPath,
+        pubPath,
+        name: "id_ed25519",
+        type: keyType,
+      };
+    }
     throw new Error("SSH key generation failed");
   }
   logInfo("SSH key generated");
@@ -188,12 +213,10 @@ export function getSshFingerprint(pubPath: string): string {
 // ─── Main Entry Point ───────────────────────────────────────────────────────
 
 /**
- * Discover, generate, or prompt for SSH keys.
+ * Discover, generate, or use all SSH keys automatically.
  *
  * - 0 keys found → generate one, return [generatedKey]
- * - 1 key found → use it silently, return [key]
- * - 2+ keys found → prompt with multiselect (all selected by default).
- *   In non-interactive mode, use all.
+ * - 1+ keys found → use all silently (ed25519 preferred, sorted first)
  *
  * Results are cached at module level so subsequent calls return instantly.
  */
@@ -212,44 +235,8 @@ export async function ensureSshKeys(): Promise<SshKeyPair[]> {
     return cachedKeys;
   }
 
-  if (discovered.length === 1) {
-    logInfo(`Using SSH key: ${discovered[0].name} (${discovered[0].type})`);
-    cachedKeys = discovered;
-    return cachedKeys;
-  }
-
-  // 2+ keys — prompt or use all
-  if (process.env.SPAWN_NON_INTERACTIVE === "1") {
-    logInfo(`Found ${discovered.length} SSH keys, using all`);
-    cachedKeys = discovered;
-    return cachedKeys;
-  }
-
-  // Use /dev/tty-based multiselect instead of @clack/prompts.
-  // When the CLI spawns a child bun process (bash → bun), the parent's
-  // process.stdin stays registered in its event loop and races with the
-  // child for terminal input.  Reading /dev/tty directly sidesteps this.
-  const result = multiPickToTTY({
-    message: "Select SSH keys to use",
-    options: discovered.map((k) => ({
-      value: k.name,
-      label: `${k.name} (${k.type})`,
-      hint: k.privPath,
-      selected: true,
-    })),
-    minRequired: 1,
-  });
-
-  if (!result || result.length === 0) {
-    logInfo("Using all SSH keys");
-    cachedKeys = discovered;
-    return cachedKeys;
-  }
-
-  const selected = discovered.filter((k) => result.includes(k.name));
-  cachedKeys = selected.length > 0 ? selected : discovered;
-
-  logInfo(`Using ${cachedKeys.length} SSH key(s)`);
+  logInfo(`Using ${discovered.length} SSH key(s)`);
+  cachedKeys = discovered;
   return cachedKeys;
 }
 
