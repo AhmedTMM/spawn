@@ -569,14 +569,27 @@ function createAgents(runner: CloudRunner): Record<string, AgentConfig> {
       cloudInitTier: "full",
       preProvision: detectGithubAuth,
       modelDefault: "openrouter/auto",
-      install: () =>
-        installAgent(
+      install: async () => {
+        await installAgent(
           runner,
           "openclaw",
           `source ~/.bashrc 2>/dev/null; ${NPM_PREFIX_SETUP} && npm install -g \${_NPM_G_FLAGS} openclaw && ` +
             "{ grep -qF '.npm-global/bin' ~/.bashrc 2>/dev/null || echo 'export PATH=\"$HOME/.npm-global/bin:$PATH\"' >> ~/.bashrc; } && " +
             "{ [ ! -f ~/.zshrc ] || grep -qF '.npm-global/bin' ~/.zshrc 2>/dev/null || echo 'export PATH=\"$HOME/.npm-global/bin:$PATH\"' >> ~/.zshrc; }",
-        ),
+        );
+        // Install Playwright Chromium for OpenClaw's browser tool (headless, no snap dependency)
+        // Then configure OpenClaw to use it via browser.executablePath
+        try {
+          await runner.runServer(
+            "npx playwright install chromium --with-deps 2>/dev/null && " +
+              "CHROME_PATH=$(find ~/.cache/ms-playwright -name chrome -type f 2>/dev/null | head -1) && " +
+              '[ -n "$CHROME_PATH" ] && openclaw config set browser.executablePath "$CHROME_PATH"',
+            300,
+          );
+        } catch {
+          logWarn("Playwright Chromium install failed (browser tool will be unavailable)");
+        }
+      },
       envVars: (apiKey) => [
         `OPENROUTER_API_KEY=${apiKey}`,
         `ANTHROPIC_API_KEY=${apiKey}`,
