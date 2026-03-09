@@ -39,6 +39,7 @@ export const SSH_BASE_OPTS: string[] = [
  * - RequestTTY=yes (force TTY allocation for the session)
  * - EscapeChar=none (disable per-byte ~ escape scanning for faster keystroke echo)
  * - AddressFamily=inet (skip IPv6 resolution to avoid intermittent stalls)
+ * - L 18789:localhost:18789 (tunnel gateway dashboard to user's machine)
  */
 export const SSH_INTERACTIVE_OPTS: string[] = [
   "-o",
@@ -65,6 +66,8 @@ export const SSH_INTERACTIVE_OPTS: string[] = [
   "EscapeChar=none",
   "-o",
   "AddressFamily=inet",
+  "-L",
+  "18789:localhost:18789",
   "-t",
 ];
 
