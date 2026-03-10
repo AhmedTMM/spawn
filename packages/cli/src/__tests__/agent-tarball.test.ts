@@ -221,5 +221,15 @@ describe("tryTarballInstall", () => {
       const mirrorCmd = String(runner.runServer.mock.calls[1][0]);
       expect(mirrorCmd).toContain('if [ "$(id -u)" != "0" ]; then');
     });
+
+    it("fixes ownership of mirrored files with chown", async () => {
+      const fetchFn = mockFetch(new Response(JSON.stringify(RELEASE_PAYLOAD)));
+      const runner = createMockRunner();
+
+      await tryTarballInstall(runner, "openclaw", fetchFn);
+
+      const mirrorCmd = String(runner.runServer.mock.calls[1][0]);
+      expect(mirrorCmd).toContain('chown -R "$(id -u):$(id -g)"');
+    });
   });
 });

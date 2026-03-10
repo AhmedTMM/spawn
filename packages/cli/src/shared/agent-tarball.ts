@@ -126,6 +126,13 @@ export async function tryTarballInstall(
     "  done",
     "  # Copy marker file",
     '  cp /root/.spawn-tarball "$HOME/.spawn-tarball" 2>/dev/null || true',
+    "  # Fix ownership — files were extracted as root",
+    '  chown -R "$(id -u):$(id -g)" "$HOME/.spawn-tarball" 2>/dev/null || true',
+    "  for _d in .claude .local .npm-global .cargo .opencode .hermes .bun; do",
+    '    if [ -d "$HOME/$_d" ]; then',
+    '      chown -R "$(id -u):$(id -g)" "$HOME/$_d" 2>/dev/null || true',
+    "    fi",
+    "  done",
     "fi",
   ].join("\n");
   try {
