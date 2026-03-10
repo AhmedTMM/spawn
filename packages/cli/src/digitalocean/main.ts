@@ -12,6 +12,7 @@ import {
   createServer as createDroplet,
   ensureDoToken,
   ensureSshKey,
+  getConnectionInfo,
   getServerName,
   interactiveSession,
   promptDoRegion,
@@ -65,6 +66,7 @@ async function main() {
     },
     interactiveSession,
     saveLaunchCmd: (cmd: string, sid?: string) => saveLaunchCmd(cmd, sid),
+    getConnectionInfo,
   };
 
   await runOrchestration(cloud, agent, agentName);

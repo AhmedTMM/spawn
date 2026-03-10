@@ -11,6 +11,7 @@ import {
   createServer as createHetznerServer,
   ensureHcloudToken,
   ensureSshKey,
+  getConnectionInfo,
   getServerName,
   interactiveSession,
   promptLocation,
@@ -60,6 +61,7 @@ async function main() {
     },
     interactiveSession,
     saveLaunchCmd: (cmd: string, sid?: string) => saveLaunchCmd(cmd, sid),
+    getConnectionInfo,
   };
 
   await runOrchestration(cloud, agent, agentName);

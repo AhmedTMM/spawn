@@ -12,6 +12,7 @@ import {
   createInstance,
   ensureAwsCli,
   ensureSshKey,
+  getConnectionInfo,
   getServerName,
   interactiveSession,
   promptBundle,
@@ -62,6 +63,7 @@ async function main() {
     },
     interactiveSession,
     saveLaunchCmd: (cmd: string, sid?: string) => saveLaunchCmd(cmd, sid),
+    getConnectionInfo,
   };
 
   await runOrchestration(cloud, agent, agentName);

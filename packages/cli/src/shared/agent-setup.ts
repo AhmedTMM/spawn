@@ -324,11 +324,16 @@ wire_api = "responses"
 
 // ─── OpenClaw Config ─────────────────────────────────────────────────────────
 
-async function setupOpenclawConfig(runner: CloudRunner, apiKey: string, modelId: string): Promise<void> {
+async function setupOpenclawConfig(
+  runner: CloudRunner,
+  apiKey: string,
+  modelId: string,
+  token?: string,
+): Promise<void> {
   logStep("Configuring openclaw...");
   await runner.runServer("mkdir -p ~/.openclaw");
 
-  const gatewayToken = crypto.randomUUID().replace(/-/g, "");
+  const gatewayToken = token ?? crypto.randomUUID().replace(/-/g, "");
   const escapedKey = jsonEscape(apiKey);
   const escapedToken = jsonEscape(gatewayToken);
   const escapedModel = jsonEscape(modelId);
@@ -644,35 +649,42 @@ function createAgents(runner: CloudRunner): Record<string, AgentConfig> {
       launchCmd: () => "source ~/.spawnrc 2>/dev/null; source ~/.zshrc 2>/dev/null; codex",
     },
 
-    openclaw: {
-      name: "OpenClaw",
-      cloudInitTier: "full",
-      dockerImage: `${DOCKER_IMAGE_PREFIX}openclaw:latest`,
-      slowInstall: true,
-      preProvision: promptGithubAuth,
-      modelPrompt: true,
-      modelDefault: "openrouter/auto",
-      install: withDockerInstall(runner, "OpenClaw", `${DOCKER_IMAGE_PREFIX}openclaw:latest`, () =>
-        installAgent(
-          runner,
-          "openclaw",
-          `source ~/.bashrc 2>/dev/null; ${NPM_PREFIX_SETUP} && npm install -g \${_NPM_G_FLAGS} openclaw && ` +
-            "{ grep -qF '.npm-global/bin' ~/.bashrc 2>/dev/null || echo 'export PATH=\"$HOME/.npm-global/bin:$PATH\"' >> ~/.bashrc; } && " +
-            "{ [ ! -f ~/.zshrc ] || grep -qF '.npm-global/bin' ~/.zshrc 2>/dev/null || echo 'export PATH=\"$HOME/.npm-global/bin:$PATH\"' >> ~/.zshrc; }",
+    openclaw: (() => {
+      const dashboardToken = crypto.randomUUID().replace(/-/g, "");
+      return {
+        name: "OpenClaw",
+        cloudInitTier: "full" satisfies AgentConfig["cloudInitTier"],
+        dockerImage: `${DOCKER_IMAGE_PREFIX}openclaw:latest`,
+        slowInstall: true,
+        preProvision: promptGithubAuth,
+        modelPrompt: true,
+        modelDefault: "openrouter/auto",
+        install: withDockerInstall(runner, "OpenClaw", `${DOCKER_IMAGE_PREFIX}openclaw:latest`, () =>
+          installAgent(
+            runner,
+            "openclaw",
+            `source ~/.bashrc 2>/dev/null; ${NPM_PREFIX_SETUP} && npm install -g \${_NPM_G_FLAGS} openclaw && ` +
+              "{ grep -qF '.npm-global/bin' ~/.bashrc 2>/dev/null || echo 'export PATH=\"$HOME/.npm-global/bin:$PATH\"' >> ~/.bashrc; } && " +
+              "{ [ ! -f ~/.zshrc ] || grep -qF '.npm-global/bin' ~/.zshrc 2>/dev/null || echo 'export PATH=\"$HOME/.npm-global/bin:$PATH\"' >> ~/.zshrc; }",
+          ),
         ),
-      ),
-      envVars: (apiKey) => [
-        `OPENROUTER_API_KEY=${apiKey}`,
-        `ANTHROPIC_API_KEY=${apiKey}`,
-        "ANTHROPIC_BASE_URL=https://openrouter.ai/api",
-      ],
-      configure: (apiKey, modelId) => setupOpenclawConfig(runner, apiKey, modelId || "openrouter/auto"),
-      preLaunch: () => startGateway(runner),
-      preLaunchMsg:
-        "Set up one channel at a time in the OpenClaw TUI. Wait for each channel to fully complete before pasting the next token — concurrent token pastes can cause setup to hang.",
-      launchCmd: () =>
-        "source ~/.spawnrc 2>/dev/null; export PATH=$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.local/bin:$PATH; openclaw tui",
-    },
+        envVars: (apiKey: string) => [
+          `OPENROUTER_API_KEY=${apiKey}`,
+          `ANTHROPIC_API_KEY=${apiKey}`,
+          "ANTHROPIC_BASE_URL=https://openrouter.ai/api",
+        ],
+        configure: (apiKey: string, modelId?: string) =>
+          setupOpenclawConfig(runner, apiKey, modelId || "openrouter/auto", dashboardToken),
+        preLaunch: () => startGateway(runner),
+        preLaunchMsg: "Your web dashboard will open automatically. If it doesn't, check the terminal for the URL.",
+        launchCmd: () =>
+          "source ~/.spawnrc 2>/dev/null; export PATH=$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.local/bin:$PATH; openclaw tui",
+        tunnel: {
+          remotePort: 18791,
+          browserUrl: (localPort: number) => `http://localhost:${localPort}/?token=${dashboardToken}`,
+        },
+      };
+    })(),
 
     opencode: {
       name: "OpenCode",

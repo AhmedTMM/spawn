@@ -145,6 +145,17 @@ let gcpInstanceName = "";
 let gcpServerIp = "";
 let gcpUsername = "";
 
+/** Return SSH connection info for tunnel support. */
+export function getConnectionInfo(): {
+  host: string;
+  user: string;
+} {
+  return {
+    host: gcpServerIp,
+    user: resolveUsername(),
+  };
+}
+
 // ─── gcloud CLI Wrapper ─────────────────────────────────────────────────────
 
 function getGcloudCmd(): string | null {

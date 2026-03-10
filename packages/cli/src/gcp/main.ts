@@ -11,6 +11,7 @@ import {
   authenticate,
   createInstance,
   ensureGcloudCli,
+  getConnectionInfo,
   getServerName,
   interactiveSession,
   promptMachineType,
@@ -62,6 +63,7 @@ async function main() {
     },
     interactiveSession,
     saveLaunchCmd: (cmd: string, sid?: string) => saveLaunchCmd(cmd, sid),
+    getConnectionInfo,
   };
 
   await runOrchestration(cloud, agent, agentName);

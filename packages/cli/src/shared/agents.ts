@@ -36,6 +36,14 @@ export interface AgentConfig {
   slowInstall?: boolean;
   /** Skip tarball install attempt (e.g., already using snapshot). */
   skipTarball?: boolean;
+  /** SSH tunnel config for web dashboards. */
+  tunnel?: TunnelConfig;
+}
+
+/** Configuration for SSH-tunneling a remote port to localhost. */
+export interface TunnelConfig {
+  remotePort: number;
+  browserUrl?: (localPort: number) => string | undefined;
 }
 
 // ─── Shared Helpers ──────────────────────────────────────────────────────────
