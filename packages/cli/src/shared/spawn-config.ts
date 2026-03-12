@@ -29,12 +29,12 @@ const MAX_CONFIG_SIZE = 1024 * 1024;
  * Throws on missing file or security violations.
  */
 export function loadSpawnConfig(filePath: string): SpawnConfig | null {
-  const resolved = resolve(filePath);
-
-  // Security: reject path traversal patterns
+  // Security: reject null bytes before any filesystem operations
   if (filePath.includes("\0")) {
     throw new Error("Config file path contains null bytes");
   }
+
+  const resolved = resolve(filePath);
 
   const stats = statSync(resolved);
   if (!stats.isFile()) {
