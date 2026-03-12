@@ -118,6 +118,7 @@ function checkUnknownFlags(args: string[]): void {
     console.error(`    ${pc.cyan("--model, -m")}         Set the LLM model (e.g. openai/gpt-5.3-codex)`);
     console.error(`    ${pc.cyan("--name")}              Set the spawn/resource name`);
     console.error(`    ${pc.cyan("--reauth")}            Force re-prompting for cloud credentials`);
+    console.error(`    ${pc.cyan("--model <id>")}        Set the model ID (e.g. openai/gpt-5.3-codex)`);
     console.error(`    ${pc.cyan("--config <path>")}     Load config from JSON file`);
     console.error(`    ${pc.cyan("--steps <list>")}      Comma-separated setup steps to enable`);
     console.error(`    ${pc.cyan("--beta tarball")}      Use pre-built tarball for agent install (repeatable)`);
@@ -797,6 +798,20 @@ async function main(): Promise<void> {
   }
   if (betaFeatures.length > 0) {
     process.env.SPAWN_BETA = betaFeatures.join(",");
+  }
+
+  // Extract --model <value> flag → MODEL_ID env var (must be before --config so it takes priority)
+  const [modelFlag, modelFilteredArgs] = extractFlagValue(
+    filteredArgs,
+    [
+      "--model",
+    ],
+    "model ID",
+    'spawn <agent> <cloud> --model "openai/gpt-5.3-codex"',
+  );
+  filteredArgs.splice(0, filteredArgs.length, ...modelFilteredArgs);
+  if (modelFlag) {
+    process.env.MODEL_ID = modelFlag;
   }
 
   // Extract --config <path> flag — load config file and apply as defaults

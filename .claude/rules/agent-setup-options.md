@@ -30,7 +30,7 @@ Last verified: 2026-03-12
 
 1. CLI flags (`--model`, `--steps`, `--name`) — explicit overrides
 2. `--config` file — bundled configuration
-3. `~/.config/spawn/preferences.json` — user defaults
+3. Environment variables (`MODEL_ID`, `SPAWN_ENABLED_STEPS`, etc.)
 4. Agent hardcoded defaults
 
 ## Web UI Invocation Examples
