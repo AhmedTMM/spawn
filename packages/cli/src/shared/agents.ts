@@ -64,7 +64,7 @@ const AGENT_EXTRA_STEPS: Record<string, OptionalStep[]> = {
     {
       value: "whatsapp",
       label: "WhatsApp",
-      hint: "scan QR code via web dashboard after launch",
+      hint: "scan QR code during setup",
     },
   ],
 };
