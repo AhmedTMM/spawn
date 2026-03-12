@@ -25,6 +25,29 @@ TELEGRAM_API_BASE="https://api.telegram.org"
 SOAK_CRON_JOB_NAME="spawn-soak-reminder"  # OpenClaw cron job name
 
 # ---------------------------------------------------------------------------
+# validate_positive_int VAR_NAME VALUE
+#
+# Validates that a value is a positive integer within a safe range (1-86400).
+# ---------------------------------------------------------------------------
+validate_positive_int() {
+  local var_name="$1"
+  local var_value="$2"
+  if ! printf '%s' "${var_value}" | grep -qE '^[0-9]+$'; then
+    log_err "${var_name} must be a positive integer, got: ${var_value}"
+    return 1
+  fi
+  if [ "${var_value}" -lt 1 ] || [ "${var_value}" -gt 86400 ]; then
+    log_err "${var_name} out of range (1-86400), got: ${var_value}"
+    return 1
+  fi
+  return 0
+}
+
+# Validate numeric env vars early to prevent injection in arithmetic/commands
+if ! validate_positive_int "SOAK_WAIT_SECONDS" "${SOAK_WAIT_SECONDS}"; then exit 1; fi
+if ! validate_positive_int "SOAK_CRON_DELAY_SECONDS" "${SOAK_CRON_DELAY_SECONDS}"; then exit 1; fi
+
+# ---------------------------------------------------------------------------
 # soak_validate_telegram_env
 #
 # Checks that TELEGRAM_BOT_TOKEN and TELEGRAM_TEST_CHAT_ID are set.
@@ -39,6 +62,9 @@ soak_validate_telegram_env() {
 
   if [ -z "${TELEGRAM_TEST_CHAT_ID:-}" ]; then
     log_err "TELEGRAM_TEST_CHAT_ID is not set"
+    missing=1
+  elif ! printf '%s' "${TELEGRAM_TEST_CHAT_ID}" | grep -qE '^-?[0-9]+$'; then
+    log_err "TELEGRAM_TEST_CHAT_ID must be numeric (chat IDs are integers), got: ${TELEGRAM_TEST_CHAT_ID}"
     missing=1
   fi
 
@@ -282,7 +308,7 @@ soak_install_openclaw_cron() {
   log_ok "OpenClaw cron job scheduled (fires at ${fire_at})"
 
   # Drop a timestamp marker so the verify step can find cron artifacts created after this point
-  cloud_exec "${app}" "touch /tmp/.spawn-cron-scheduled" 2>/dev/null || true
+  cloud_exec "${app}" "touch /tmp/.spawn-cron-scheduled-${app}" 2>/dev/null || true
 
   # Verify the job exists via openclaw cron list
   local list_output
@@ -345,7 +371,7 @@ soak_test_openclaw_cron_fired() {
   if [ -z "${message_id}" ]; then
     log_info "Searching ~/.openclaw/cron/ for Telegram API response..."
     local cron_data
-    cron_data=$(cloud_exec "${app}" "find ~/.openclaw/cron/ -type f -name '*.json' -newer /tmp/.spawn-cron-scheduled 2>/dev/null | \
+    cron_data=$(cloud_exec "${app}" "find ~/.openclaw/cron/ -type f -name '*.json' -newer /tmp/.spawn-cron-scheduled-${app} 2>/dev/null | \
       xargs grep -l 'message_id' 2>/dev/null | head -1 | xargs cat 2>/dev/null || true" 2>&1) || true
 
     if [ -n "${cron_data}" ]; then
