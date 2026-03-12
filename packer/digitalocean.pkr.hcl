@@ -41,10 +41,8 @@ source "digitalocean" "spawn" {
   ssh_username = "root"
 
   snapshot_name = local.image_name
-  snapshot_regions = [
-    "nyc1", "nyc3", "sfo3", "tor1", "ams3",
-    "lon1", "fra1", "blr1", "sgp1", "syd1",
-  ]
+  # Regions are transferred in a separate workflow step (tolerates transient 403s)
+  # Packer's built-in snapshot_regions treats any transfer poll failure as fatal
 }
 
 build {
