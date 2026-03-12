@@ -56,6 +56,16 @@ const AGENT_EXTRA_STEPS: Record<string, OptionalStep[]> = {
       label: "Chrome browser",
       hint: "~400 MB — enables web tools",
     },
+    {
+      value: "telegram",
+      label: "Telegram",
+      hint: "connect via bot token from @BotFather",
+    },
+    {
+      value: "whatsapp",
+      label: "WhatsApp",
+      hint: "scan QR code via web dashboard after launch",
+    },
   ],
 };
 
