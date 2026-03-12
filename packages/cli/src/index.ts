@@ -118,6 +118,8 @@ function checkUnknownFlags(args: string[]): void {
     console.error(`    ${pc.cyan("--model, -m")}         Set the LLM model (e.g. openai/gpt-5.3-codex)`);
     console.error(`    ${pc.cyan("--name")}              Set the spawn/resource name`);
     console.error(`    ${pc.cyan("--reauth")}            Force re-prompting for cloud credentials`);
+    console.error(`    ${pc.cyan("--config <path>")}     Load config from JSON file`);
+    console.error(`    ${pc.cyan("--steps <list>")}      Comma-separated setup steps to enable`);
     console.error(`    ${pc.cyan("--beta tarball")}      Use pre-built tarball for agent install (repeatable)`);
     console.error(`    ${pc.cyan("--help, -h")}          Show help information`);
     console.error(`    ${pc.cyan("--version, -v")}       Show version`);
@@ -795,6 +797,60 @@ async function main(): Promise<void> {
   }
   if (betaFeatures.length > 0) {
     process.env.SPAWN_BETA = betaFeatures.join(",");
+  }
+
+  // Extract --config <path> flag — load config file and apply as defaults
+  const [configPath, configFilteredArgs] = extractFlagValue(
+    filteredArgs,
+    [
+      "--config",
+    ],
+    "config file",
+    "spawn <agent> <cloud> --config setup.json",
+  );
+  filteredArgs.splice(0, filteredArgs.length, ...configFilteredArgs);
+
+  if (configPath) {
+    const { loadSpawnConfig } = await import("./shared/spawn-config.js");
+    const configResult = tryCatch(() => loadSpawnConfig(configPath));
+    if (!configResult.ok) {
+      console.error(pc.red(`Error loading config file: ${getErrorMessage(configResult.error)}`));
+      process.exit(1);
+    }
+    const config = configResult.data;
+    if (config) {
+      // Apply config values as defaults (explicit flags take priority)
+      if (config.model && !process.env.MODEL_ID) {
+        process.env.MODEL_ID = config.model;
+      }
+      if (config.steps && !process.env.SPAWN_ENABLED_STEPS) {
+        process.env.SPAWN_ENABLED_STEPS = config.steps.join(",");
+      }
+      if (config.name && !process.env.SPAWN_NAME) {
+        process.env.SPAWN_NAME = config.name;
+      }
+      if (config.setup?.telegram_bot_token && !process.env.TELEGRAM_BOT_TOKEN) {
+        process.env.TELEGRAM_BOT_TOKEN = config.setup.telegram_bot_token;
+      }
+      if (config.setup?.github_token && !process.env.GITHUB_TOKEN) {
+        process.env.GITHUB_TOKEN = config.setup.github_token;
+      }
+    }
+  }
+
+  // Extract --steps <value> flag — comma-separated list of setup steps
+  const [stepsFlag, stepsFilteredArgs] = extractFlagValue(
+    filteredArgs,
+    [
+      "--steps",
+    ],
+    "setup steps",
+    "spawn <agent> <cloud> --steps github,browser,telegram",
+  );
+  filteredArgs.splice(0, filteredArgs.length, ...stepsFilteredArgs);
+  if (stepsFlag !== undefined) {
+    // --steps "" means disable all optional steps
+    process.env.SPAWN_ENABLED_STEPS = stepsFlag;
   }
 
   // Extract --output <format> flag

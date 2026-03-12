@@ -364,11 +364,11 @@ async function setupOpenclawConfig(
     logWarn("Browser config setup failed (non-fatal)");
   }
 
-  // Telegram channel setup — prompt for bot token and inject into config
+  // Telegram channel setup — check env var first, then prompt interactively
   if (enabledSteps?.has("telegram")) {
     logStep("Setting up Telegram...");
-    const botToken = await prompt("Telegram bot token (from @BotFather): ");
-    const trimmedToken = botToken.trim();
+    const envToken = process.env.TELEGRAM_BOT_TOKEN;
+    const trimmedToken = envToken?.trim() || (await prompt("Telegram bot token (from @BotFather): ")).trim();
 
     if (trimmedToken) {
       const escapedBotToken = jsonEscape(trimmedToken);
