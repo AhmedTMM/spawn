@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { getTmpDir } from "./paths";
 import { asyncTryCatch, asyncTryCatchIf, isOperationalError, tryCatchIf } from "./result.js";
 import { getErrorMessage } from "./type-guards";
-import { Err, jsonEscape, logError, logInfo, logStep, logWarn, Ok, prompt, shellQuote, withRetry } from "./ui";
+import { Err, jsonEscape, logError, logInfo, logStep, logWarn, Ok, shellQuote, withRetry } from "./ui";
 
 /**
  * Wrap an SSH-based async operation into a Result for use with withRetry.
@@ -364,32 +364,23 @@ async function setupOpenclawConfig(
     logWarn("Browser config setup failed (non-fatal)");
   }
 
-  // Telegram channel setup — check env var first, then prompt interactively
+  // Enable channel plugins before gateway starts — plugins are disabled by
+  // default in OpenClaw. The gateway must start with plugins already enabled.
+  // Actual channel configuration (token add, QR login) happens in orchestrate.ts
+  // AFTER the gateway is running.
+  const pluginsToEnable: string[] = [];
   if (enabledSteps?.has("telegram")) {
-    logStep("Setting up Telegram...");
-    const envToken = process.env.TELEGRAM_BOT_TOKEN;
-    const trimmedToken = envToken?.trim() || (await prompt("Telegram bot token (from @BotFather): ")).trim();
-
-    if (trimmedToken) {
-      const escapedBotToken = jsonEscape(trimmedToken);
-      const telegramResult = await asyncTryCatchIf(isOperationalError, () =>
-        runner.runServer(
-          "export PATH=$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.local/bin:$PATH; " +
-            `openclaw config set channels.telegram.botToken ${escapedBotToken}`,
-        ),
-      );
-      if (telegramResult.ok) {
-        logInfo("Telegram bot token configured");
-      } else {
-        logWarn("Telegram config failed — set it up via the web dashboard after launch");
-      }
-    } else {
-      logInfo("No token entered — set up Telegram via the web dashboard after launch");
-    }
+    pluginsToEnable.push("telegram");
   }
-
-  // WhatsApp — QR code scanning happens interactively in orchestrate.ts
-  // after the gateway starts and tunnel is set up. No config needed here.
+  if (enabledSteps?.has("whatsapp")) {
+    pluginsToEnable.push("whatsapp");
+  }
+  if (pluginsToEnable.length > 0) {
+    const enableCmds = pluginsToEnable.map((p) => `openclaw plugins enable ${p}`).join("; ");
+    await asyncTryCatchIf(isOperationalError, () =>
+      runner.runServer(`export PATH=$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.local/bin:$PATH; ${enableCmds}`),
+    );
+  }
 
   // Write USER.md bootstrap file — guides users to the web dashboard for
   // visual tasks like WhatsApp QR code scanning that don't work in the TUI.
