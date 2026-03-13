@@ -170,7 +170,7 @@ async function promptSetupOptions(agentName: string): Promise<Set<string> | unde
   }
 
   const selected = await p.multiselect({
-    message: "Setup options (↑/↓ navigate, space select, enter confirm)",
+    message: "Setup options (space to select, enter to confirm)",
     options: filteredSteps.map((s) => ({
       value: s.value,
       label: s.label,
