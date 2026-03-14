@@ -209,13 +209,13 @@ async function promptSetupOptions(agentName: string): Promise<Set<string> | unde
     stepSet.delete("custom-model");
     const modelId = await p.text({
       message: "Model ID",
-      placeholder: "provider/model-name (e.g. anthropic/claude-sonnet-4)",
+      placeholder: "provider/model-name",
       validate: (val) => {
         if (!val.trim()) {
           return "Model ID is required";
         }
         if (!validateModelId(val.trim())) {
-          return "Invalid format — use provider/model (e.g. anthropic/claude-sonnet-4)";
+          return "Invalid format — use provider/model";
         }
         return undefined;
       },
