@@ -7,6 +7,7 @@ import type { AgentConfig } from "./agents";
 import type { SshTunnelHandle } from "./ssh";
 
 import { readFileSync } from "node:fs";
+import * as p from "@clack/prompts";
 import * as v from "valibot";
 import { generateSpawnId, saveLaunchCmd, saveSpawnRecord } from "../history.js";
 import { offerGithubAuth, wrapSshCall } from "./agent-setup";
@@ -102,6 +103,93 @@ function loadPreferredModel(agentName: string): string | null {
   return result.ok ? result.data : null;
 }
 
+/** Popular models shown in the interactive model picker. */
+const POPULAR_MODELS: {
+  value: string;
+  label: string;
+  hint?: string;
+}[] = [
+  {
+    value: "openrouter/openrouter/auto",
+    label: "Auto (recommended)",
+    hint: "OpenRouter picks the best model",
+  },
+  {
+    value: "anthropic/claude-sonnet-4",
+    label: "Claude Sonnet 4",
+    hint: "anthropic/claude-sonnet-4",
+  },
+  {
+    value: "anthropic/claude-opus-4",
+    label: "Claude Opus 4",
+    hint: "anthropic/claude-opus-4",
+  },
+  {
+    value: "google/gemini-2.5-pro",
+    label: "Gemini 2.5 Pro",
+    hint: "google/gemini-2.5-pro",
+  },
+  {
+    value: "openai/gpt-4.1",
+    label: "GPT-4.1",
+    hint: "openai/gpt-4.1",
+  },
+  {
+    value: "deepseek/deepseek-r1",
+    label: "DeepSeek R1",
+    hint: "deepseek/deepseek-r1",
+  },
+  {
+    value: "_custom",
+    label: "Enter model manually…",
+  },
+];
+
+/**
+ * Interactive model picker — shown when the agent supports model selection
+ * and no model was pre-set via MODEL_ID env or preferences file.
+ * Returns a validated model ID, or undefined on cancel.
+ */
+async function promptModelId(defaultModel: string | undefined): Promise<string | undefined> {
+  const choice = await p.select({
+    message: "Model",
+    options: POPULAR_MODELS,
+    initialValue:
+      defaultModel && POPULAR_MODELS.some((m) => m.value === defaultModel)
+        ? defaultModel
+        : "openrouter/openrouter/auto",
+  });
+
+  if (p.isCancel(choice)) {
+    return defaultModel;
+  }
+
+  if (choice !== "_custom") {
+    return choice;
+  }
+
+  // Custom model entry
+  const custom = await p.text({
+    message: "Model ID (e.g. anthropic/claude-sonnet-4)",
+    placeholder: "provider/model-name",
+    validate: (val) => {
+      if (!val.trim()) {
+        return "Model ID is required";
+      }
+      if (!validateModelId(val.trim())) {
+        return "Invalid model ID — must be provider/model (e.g. anthropic/claude-sonnet-4)";
+      }
+      return undefined;
+    },
+  });
+
+  if (p.isCancel(custom)) {
+    return defaultModel;
+  }
+
+  return custom.trim();
+}
+
 export async function runOrchestration(
   cloud: CloudOrchestrator,
   agent: AgentConfig,
@@ -139,11 +227,19 @@ export async function runOrchestration(
     }
   }
 
-  // 4. Model ID — priority: --model flag (MODEL_ID env) > preferences file > agent default
-  const rawModelId = process.env.MODEL_ID || loadPreferredModel(agentName) || agent.modelDefault;
-  const modelId = rawModelId && validateModelId(rawModelId) ? rawModelId : undefined;
-  if (rawModelId && !modelId) {
-    logWarn(`Ignoring invalid MODEL_ID: ${rawModelId}`);
+  // 4. Model ID — priority: --model flag (MODEL_ID env) > preferences file > interactive prompt > agent default
+  const presetModelId = process.env.MODEL_ID || loadPreferredModel(agentName);
+  let modelId: string | undefined;
+  if (presetModelId) {
+    modelId = validateModelId(presetModelId) ? presetModelId : undefined;
+    if (!modelId) {
+      logWarn(`Ignoring invalid MODEL_ID: ${presetModelId}`);
+    }
+  } else if (agent.configure && process.stdin.isTTY) {
+    // Interactive model picker — only shown when no model was pre-set and stdin is a terminal
+    modelId = await promptModelId(agent.modelDefault);
+  } else {
+    modelId = agent.modelDefault && validateModelId(agent.modelDefault) ? agent.modelDefault : undefined;
   }
 
   // 5. Size/bundle selection
