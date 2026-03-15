@@ -369,9 +369,13 @@ async function setupOpenclawConfig(
     },
   };
 
-  // Channel config — written directly to the config file.
-  // Both use dmPolicy "pairing" so users must approve new senders.
-  const channels: Record<string, unknown> = {};
+  // Channel config — always write stubs so the dashboard renders them properly.
+  // Telegram gets full config if a bot token was provided; otherwise an empty stub.
+  // WhatsApp always starts as a stub — QR login happens interactively after launch.
+  const channels: Record<string, unknown> = {
+    telegram: {},
+    whatsapp: {},
+  };
 
   if (telegramBotToken) {
     channels.telegram = {
@@ -388,9 +392,7 @@ async function setupOpenclawConfig(
     logInfo("Telegram bot token configured");
   }
 
-  if (Object.keys(channels).length > 0) {
-    configObj.channels = channels;
-  }
+  configObj.channels = channels;
 
   // Download existing config → deep-merge locally → re-upload.
   // This keeps all logic in our linted TypeScript instead of a remote bun script.
