@@ -4,7 +4,7 @@ import type { CloudInstance, VMConnection } from "../history.js";
 import type { CloudInitTier } from "../shared/agents";
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { normalize } from "node:path";
+import { dirname, normalize } from "node:path";
 import { getErrorMessage, isNumber, isString, toObjectArray, toRecord } from "@openrouter/spawn-shared";
 import { handleBillingError, isBillingError, showNonBillingError } from "../shared/billing-guidance";
 import { getPackagesForTier, NODE_INSTALL_CMD, needsBun, needsNode } from "../shared/cloud-init";
@@ -150,7 +150,7 @@ async function hetznerGetAll(endpoint: string, key: string): Promise<Record<stri
 
 async function saveTokenToConfig(token: string): Promise<void> {
   const configPath = getSpawnCloudConfigPath("hetzner");
-  const dir = configPath.replace(/\/[^/]+$/, "");
+  const dir = dirname(configPath);
   mkdirSync(dir, {
     recursive: true,
     mode: 0o700,
