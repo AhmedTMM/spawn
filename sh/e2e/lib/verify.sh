@@ -85,6 +85,10 @@ input_test_claude() {
 
   local output
   # claude -p (--print) reads the prompt from stdin.
+  # --dangerously-skip-permissions: bypass trust dialog for /tmp/e2e-test
+  #   (newer Claude Code requires per-directory trust; /tmp/e2e-test is not
+  #   in the ~/.claude.json trusted projects list written during install)
+  # --no-session-persistence: don't write session files to disk during tests
   # The prompt is read from the staged temp file — no interpolation in this command.
   output=$(cloud_exec "${app}" "\
     source ~/.spawnrc 2>/dev/null; \
@@ -92,7 +96,7 @@ input_test_claude() {
     _TIMEOUT='${INPUT_TEST_TIMEOUT}'; \
     rm -rf /tmp/e2e-test && mkdir -p /tmp/e2e-test && cd /tmp/e2e-test && git init -q; \
     PROMPT=\$(cat /tmp/.e2e-prompt | base64 -d); \
-    printf '%s' \"\$PROMPT\" | timeout \"\$_TIMEOUT\" claude -p" 2>&1) || true
+    timeout \"\$_TIMEOUT\" claude -p --dangerously-skip-permissions --no-session-persistence \"\$PROMPT\"" 2>&1) || true
 
   if printf '%s' "${output}" | grep -qx "${INPUT_TEST_MARKER}"; then
     log_ok "claude input test — marker found in response"
@@ -118,6 +122,7 @@ input_test_codex() {
   _stage_prompt_remotely "${app}" "${encoded_prompt}"
 
   local output
+  # codex exec --full-auto: non-interactive subcommand for v0.116.0+
   # The prompt is read from the staged temp file — no interpolation in this command.
   output=$(cloud_exec "${app}" "\
     source ~/.spawnrc 2>/dev/null; \
