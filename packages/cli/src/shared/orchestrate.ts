@@ -318,16 +318,15 @@ export async function runOrchestration(
   logInfo(`${agent.name} on ${cloud.cloudLabel}`);
   process.stderr.write("\n");
 
-  // Funnel telemetry: mark the start of the onboarding pipeline and attach
-  // agent/cloud as context so every event carries them automatically.
+  // Funnel telemetry: attach agent/cloud as context so every event carries
+  // them automatically. The funnel timer starts here; picker events
+  // (spawn_launched → name_entered) are tracked in commands/interactive.ts.
   _funnelStart = Date.now();
   setTelemetryContext("agent", agentName);
   setTelemetryContext("cloud", cloud.cloudName);
-  trackFunnel("funnel_started");
 
   // 1. Authenticate with cloud provider
   await cloud.authenticate();
-  trackFunnel("funnel_cloud_authed");
 
   const betaFeatures = new Set((process.env.SPAWN_BETA ?? "").split(",").filter(Boolean));
   const fastMode = process.env.SPAWN_FAST === "1" || betaFeatures.has("parallel");
@@ -629,7 +628,6 @@ async function postInstall(
       logWarn("Agent configuration failed (continuing with defaults)");
     }
   }
-  trackFunnel("funnel_configure_completed");
 
   // GitHub CLI setup
   if (!enabledSteps || enabledSteps.has("github")) {
@@ -750,7 +748,6 @@ async function postInstall(
       await retryOrQuit("Retry pre-launch setup?");
     }
   }
-  trackFunnel("funnel_prelaunch_completed");
 
   // Web dashboard access
   let tunnelHandle: SshTunnelHandle | undefined;

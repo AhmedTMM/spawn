@@ -20,6 +20,7 @@ import {
 import { asyncTryCatch, isFileError, tryCatch, tryCatchIf } from "../shared/result.js";
 import { getLocalShell, isWindows } from "../shared/shell.js";
 import { maybeShowStarPrompt } from "../shared/star-prompt.js";
+import { captureEvent, setTelemetryContext } from "../shared/telemetry.js";
 import { logError, logInfo, logStep, prepareStdinForHandoff, toKebabCase } from "../shared/ui.js";
 import { promptSetupOptions, promptSpawnName } from "./interactive.js";
 import { handleRecordAction } from "./list.js";
@@ -987,6 +988,13 @@ function runBundleHeadless(
 export async function cmdRunHeadless(agent: string, cloud: string, opts: HeadlessOptions = {}): Promise<void> {
   const { prompt, debug, outputFormat, spawnName } = opts;
 
+  // Funnel entry for headless runs. No picker to instrument — headless either
+  // validates and proceeds straight to runOrchestration, or it errors out.
+  // The orchestrate.ts funnel_* events cover the rest.
+  captureEvent("spawn_launched", {
+    mode: "headless",
+  });
+
   // Phase 1: Validate inputs (exit code 3)
   const validationResult = tryCatch(() => {
     validateIdentifier(agent, "Agent name");
@@ -1230,12 +1238,26 @@ export async function cmdRun(
   dryRun?: boolean,
   debug?: boolean,
 ): Promise<void> {
+  captureEvent("spawn_launched", {
+    mode: "direct",
+  });
+
   const manifest = await loadManifestWithSpinner();
   ({ agent, cloud } = resolveAndLog(manifest, agent, cloud));
 
   validateRunSecurity(agent, cloud, prompt);
   ({ agent, cloud } = detectAndFixSwappedArgs(manifest, agent, cloud));
   validateEntities(manifest, agent, cloud);
+
+  // Both arguments pre-supplied — emit as implicit selections.
+  captureEvent("agent_selected", {
+    agent,
+  });
+  captureEvent("cloud_selected", {
+    cloud,
+  });
+  setTelemetryContext("agent", agent);
+  setTelemetryContext("cloud", cloud);
 
   if (dryRun) {
     showDryRunPreview(manifest, agent, cloud, prompt);
@@ -1255,6 +1277,7 @@ export async function cmdRun(
   }
 
   const spawnName = await promptSpawnName();
+  captureEvent("name_entered");
 
   // If a name was given, check whether an active instance with that name already
   // exists for this agent + cloud combination.  When it does, route the user into

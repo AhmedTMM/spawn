@@ -8,6 +8,7 @@ import { getAgentOptionalSteps } from "../shared/agents.js";
 import { hasSavedOpenRouterKey } from "../shared/oauth.js";
 import { asyncTryCatch, tryCatch, unwrapOr } from "../shared/result.js";
 import { maybeShowStarPrompt } from "../shared/star-prompt.js";
+import { captureEvent, setTelemetryContext } from "../shared/telemetry.js";
 import { validateModelId } from "../shared/ui.js";
 import { cmdLink } from "./link.js";
 import { activeServerPicker } from "./list.js";
@@ -278,6 +279,11 @@ export { getAndValidateCloudChoices, promptSetupOptions, promptSpawnName, select
 export async function cmdInteractive(): Promise<void> {
   p.intro(pc.inverse(` spawn v${VERSION} `));
 
+  // Funnel: baseline — did the user even start?
+  captureEvent("spawn_launched", {
+    mode: "interactive",
+  });
+
   // If the user has existing spawns, offer a top-level menu so they can
   // reconnect without knowing about `spawn list` or `spawn last`.
   const activeServers = getActiveServers();
@@ -308,9 +314,19 @@ export async function cmdInteractive(): Promise<void> {
 
   const manifest = await loadManifestWithSpinner();
   const agentChoice = await selectAgent(manifest);
+  // Funnel: did they pick an agent or bail at the list?
+  captureEvent("agent_selected", {
+    agent: agentChoice,
+  });
+  setTelemetryContext("agent", agentChoice);
 
   const { clouds, hintOverrides } = getAndValidateCloudChoices(manifest, agentChoice);
   const cloudChoice = await selectCloud(manifest, clouds, hintOverrides);
+  // Funnel: did they pick a cloud or bail?
+  captureEvent("cloud_selected", {
+    cloud: cloudChoice,
+  });
+  setTelemetryContext("cloud", cloudChoice);
 
   // Handle "Link Existing Server" — redirect to spawn link with the agent pre-selected
   if (cloudChoice === "link-existing") {
@@ -339,6 +355,8 @@ export async function cmdInteractive(): Promise<void> {
   await maybePromptSkills(manifest, agentChoice);
 
   const spawnName = await promptSpawnName();
+  // Funnel: did they commit with a name or cancel?
+  captureEvent("name_entered");
 
   const agentName = manifest.agents[agentChoice].name;
   const cloudName = manifest.clouds[cloudChoice].name;
@@ -364,6 +382,10 @@ export async function cmdInteractive(): Promise<void> {
 export async function cmdAgentInteractive(agent: string, prompt?: string, dryRun?: boolean): Promise<void> {
   p.intro(pc.inverse(` spawn v${VERSION} `));
 
+  captureEvent("spawn_launched", {
+    mode: "agent_interactive",
+  });
+
   const manifest = await loadManifestWithSpinner();
   const resolvedAgent = resolveAgentKey(manifest, agent);
 
@@ -377,8 +399,17 @@ export async function cmdAgentInteractive(agent: string, prompt?: string, dryRun
     process.exit(1);
   }
 
+  captureEvent("agent_selected", {
+    agent: resolvedAgent,
+  });
+  setTelemetryContext("agent", resolvedAgent);
+
   const { clouds, hintOverrides } = getAndValidateCloudChoices(manifest, resolvedAgent);
   const cloudChoice = await selectCloud(manifest, clouds, hintOverrides);
+  captureEvent("cloud_selected", {
+    cloud: cloudChoice,
+  });
+  setTelemetryContext("cloud", cloudChoice);
 
   // Handle "Link Existing Server" — redirect to spawn link with the agent pre-selected
   if (cloudChoice === "link-existing") {
@@ -409,6 +440,7 @@ export async function cmdAgentInteractive(agent: string, prompt?: string, dryRun
   }
 
   const spawnName = await promptSpawnName();
+  captureEvent("name_entered");
 
   const agentName = manifest.agents[resolvedAgent].name;
   const cloudName = manifest.clouds[cloudChoice].name;
