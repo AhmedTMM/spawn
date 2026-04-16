@@ -221,7 +221,9 @@ log "Hard timeout: ${HARD_TIMEOUT}s"
 
 # Run claude in background, output goes to log file.
 # The trigger server is fire-and-forget — VM keep-alive is handled by systemd.
-claude -p "$(cat "${PROMPT_FILE}")" >> "${LOG_FILE}" 2>&1 &
+# Team lead uses Sonnet — coordination (spawn, monitor, shutdown) doesn't need
+# Opus-level reasoning and Sonnet output tokens are 5x cheaper.
+claude -p "$(cat "${PROMPT_FILE}")" --model sonnet >> "${LOG_FILE}" 2>&1 &
 CLAUDE_PID=$!
 log "Claude started (pid=${CLAUDE_PID})"
 

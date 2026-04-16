@@ -320,8 +320,12 @@ HARD_TIMEOUT=$((CYCLE_TIMEOUT + 300))
 log "Hard timeout: ${HARD_TIMEOUT}s"
 
 # Run claude in background, output goes to log file.
-# Triage uses gemini-3-flash (lightweight safety check); other modes use default (Opus) for team lead.
-CLAUDE_MODEL_FLAG=""
+# Triage uses gemini-3-flash (lightweight safety check).
+# All other modes use Sonnet for the team lead — the lead's job is coordination
+# (spawn teammates, monitor, shut down), not deep reasoning. Opus is 5x more
+# expensive on output tokens and the quality difference for coordination is
+# negligible. Teammates (spawned by the lead) use their own model flags.
+CLAUDE_MODEL_FLAG="--model sonnet"
 if [[ "${RUN_MODE}" == "triage" ]]; then
     CLAUDE_MODEL_FLAG="--model google/gemini-3-flash-preview"
 fi
