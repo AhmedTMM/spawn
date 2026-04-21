@@ -28,7 +28,21 @@ if [[ -n "${SPAWN_ISSUE}" ]]; then
     fi
 fi
 
+# --- Collaborator gate (OSS readiness) ---
+# Source the collaborator check so bots never see external issues.
+GATE_SCRIPT="${SCRIPT_DIR}/../../../.claude/scripts/collaborator-gate.sh"
+if [[ -f "${GATE_SCRIPT}" ]]; then
+    source "${GATE_SCRIPT}"
+fi
+
 if [[ -n "${SPAWN_ISSUE}" ]]; then
+    # Check if issue author is a collaborator — skip silently if not
+    if command -v is_issue_from_collaborator &>/dev/null; then
+        if ! is_issue_from_collaborator "${SPAWN_ISSUE}"; then
+            echo "[refactor] Skipping issue #${SPAWN_ISSUE} — author is not a collaborator" >&2
+            exit 0
+        fi
+    fi
     RUN_MODE="issue"
     WORKTREE_BASE="/tmp/spawn-worktrees/issue-${SPAWN_ISSUE}"
     TEAM_NAME="spawn-issue-${SPAWN_ISSUE}"

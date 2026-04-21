@@ -39,7 +39,12 @@ Research new cloud/sandbox providers. Criteria: prestige or unbeatable pricing (
 Search for trending AI coding agents meeting ALL of: 1000+ GitHub stars, single-command install, works with OpenRouter. Search HN, GitHub trending, Reddit. Create issue with label `agent-proposal,discovery-team`.
 
 ### Issue Responder (spawn 1)
-Fetch open issues. SKIP `discovery-team` labeled issues. DEDUP: if `-- discovery/` exists, skip. If someone requests a cloud/agent, point to existing proposal or create one. Leave bugs for refactor team.
+Fetch open issues. **Collaborator gate**: for each issue, check if the author is a repo collaborator before engaging:
+```bash
+gh api repos/OpenRouterTeam/spawn/collaborators/AUTHOR --silent 2>/dev/null
+```
+If the check fails (404 = not a collaborator), SKIP that issue entirely — do not comment, do not respond, do not acknowledge. Only engage with issues from collaborators.
+SKIP `discovery-team` labeled issues. DEDUP: if `-- discovery/` exists, skip. If someone requests a cloud/agent, point to existing proposal or create one. Leave bugs for refactor team.
 
 ### Skills Scout (spawn 1)
 Research best skills, MCP servers, and configs per agent in manifest.json. For each agent: check for skill standards, community skills, useful MCP servers, agent-specific configs, prerequisites. Verify packages exist on npm + start successfully. Update manifest.json skills section. Max 5 skills per PR.
