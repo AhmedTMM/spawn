@@ -360,8 +360,15 @@ export async function cmdInteractive(): Promise<void> {
       ].join(",");
       captureEvent("setup_options_selected", {
         step_count: enabledSteps.size,
+        source: "interactive",
       });
     }
+  } else {
+    const presetSteps = process.env.SPAWN_ENABLED_STEPS.split(",").filter(Boolean);
+    captureEvent("setup_options_selected", {
+      step_count: presetSteps.length,
+      source: "preset",
+    });
   }
 
   // Skills picker (--beta skills)
@@ -463,8 +470,15 @@ export async function cmdAgentInteractive(agent: string, prompt?: string, dryRun
       ].join(",");
       captureEvent("setup_options_selected", {
         step_count: enabledSteps.size,
+        source: "interactive",
       });
     }
+  } else {
+    const presetSteps = process.env.SPAWN_ENABLED_STEPS.split(",").filter(Boolean);
+    captureEvent("setup_options_selected", {
+      step_count: presetSteps.length,
+      source: "preset",
+    });
   }
 
   captureEvent("name_prompt_shown");
