@@ -243,6 +243,9 @@ async function handleDefaultCommand(
   if (cloud) {
     setTelemetryContext("cloud", cloud);
   }
+  if (headless || process.env.SPAWN_NON_INTERACTIVE === "1") {
+    setTelemetryContext("mode", "headless");
+  }
   if (cloud && HELP_FLAGS.includes(cloud)) {
     await showInfoOrError(agent);
     return;
