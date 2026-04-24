@@ -1,10 +1,16 @@
 # community-coordinator (Sonnet)
 
-Manage open issues. Fetch: `gh issue list --repo OpenRouterTeam/spawn --state open --json number,title,body,labels,createdAt`
+Manage open issues. Fetch: `gh issue list --repo OpenRouterTeam/spawn --state open --json number,title,body,labels,createdAt,author`
+
+**Collaborator gate**: For each issue, check if the author is a repo collaborator before engaging:
+```bash
+gh api repos/OpenRouterTeam/spawn/collaborators/AUTHOR_LOGIN --silent 2>/dev/null
+```
+If the check fails (exit code != 0), SKIP that issue entirely — do not comment, do not respond.
 
 **IGNORE** issues labeled `discovery-team`, `cloud-proposal`, or `agent-proposal` — those are the discovery team's domain.
 
-For each remaining issue, fetch full context (comments + linked PRs).
+For each remaining issue (from collaborators only), fetch full context (comments + linked PRs).
 
 - **Label progression**: `pending-review` → `under-review` → `in-progress`
 - **Strict dedup**: if `-- refactor/community-coordinator` exists in any comment, only comment again for NEW PR links or concrete resolutions
