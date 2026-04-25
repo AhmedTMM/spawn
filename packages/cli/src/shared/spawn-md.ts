@@ -454,7 +454,7 @@ async function applySetupStep(runner: CloudRunner, step: SetupStep): Promise<voi
       }
       const value = await promptSecret(`  Enter ${step.name}: `);
       if (value) {
-        const escapedName = step.name.replace(/[^A-Z0-9_]/g, "");
+        const escapedName = step.name.replace(/[^A-Za-z0-9_]/g, "");
         const b64Val = Buffer.from(value).toString("base64");
         await runner.runServer(
           `mkdir -p /etc/spawn && printf 'export %s="%s"\\n' '${escapedName}' "$(echo '${b64Val}' | base64 -d)" >> /etc/spawn/secrets && chmod 600 /etc/spawn/secrets`,
@@ -489,39 +489,44 @@ async function installMcpServersFromTemplate(
   servers: McpServerEntry[],
   agentName: string,
 ): Promise<void> {
-  if (agentName === "claude" || agentName === "cursor") {
-    const mcpConfig: Record<string, Record<string, unknown>> = {};
-    for (const server of servers) {
-      const entry: Record<string, unknown> = {
-        command: server.command,
-        args: server.args,
-      };
-      if (server.env) {
-        entry.env = server.env;
-      }
-      mcpConfig[server.name] = entry;
+  const record: Record<
+    string,
+    {
+      command: string;
+      args: string[];
+      env?: Record<string, string>;
     }
+  > = {};
+  for (const server of servers) {
+    record[server.name] = server.env
+      ? {
+          command: server.command,
+          args: server.args,
+          env: server.env,
+        }
+      : {
+          command: server.command,
+          args: server.args,
+        };
+  }
 
-    const settingsPath = agentName === "claude" ? "~/.claude/settings.json" : "~/.cursor/mcp.json";
-    const mcpJson = JSON.stringify(mcpConfig);
-    const mergeScript = `
-      const fs = require('fs');
-      const path = '${settingsPath}'.replace('~', process.env.HOME);
-      let settings = {};
-      try { settings = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch {}
-      settings.mcpServers = { ...settings.mcpServers, ...${mcpJson} };
-      fs.mkdirSync(require('path').dirname(path), { recursive: true });
-      fs.writeFileSync(path, JSON.stringify(settings, null, 2));
-    `;
-    const b64 = Buffer.from(mergeScript).toString("base64");
-    const installResult = await asyncTryCatch(() => runner.runServer(`echo '${b64}' | base64 -d | node -e "$(cat)"`));
-    if (installResult.ok) {
-      logInfo(`  Installed ${servers.length} MCP server${servers.length > 1 ? "s" : ""}`);
+  const { installClaudeMcpServers, installCursorMcpServers, installCodexMcpServers, installGenericMcpServers } =
+    await import("./skills.js");
+  const installResult = await asyncTryCatch(async () => {
+    if (agentName === "claude") {
+      await installClaudeMcpServers(runner, record);
+    } else if (agentName === "cursor") {
+      await installCursorMcpServers(runner, record);
+    } else if (agentName === "codex") {
+      await installCodexMcpServers(runner, record);
     } else {
-      logWarn("  MCP server installation failed — configure manually");
+      await installGenericMcpServers(runner, agentName, record);
     }
+  });
+  if (installResult.ok) {
+    logInfo(`  Installed ${servers.length} MCP server${servers.length > 1 ? "s" : ""}`);
   } else {
-    logInfo(`  MCP server installation not yet supported for ${agentName} — skipping`);
+    logWarn("  MCP server installation failed — configure manually");
   }
 }
 

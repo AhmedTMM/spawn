@@ -622,6 +622,7 @@ async function postInstall(
   // flag, not from spawn.md.  spawn.md only handles custom setup (OAuth,
   // MCP servers, setup commands).
   let spawnMdConfig: import("./spawn-md.js").SpawnMdConfig | null = null;
+  let repoCloned = false;
   const repoSlug = process.env.SPAWN_REPO;
   if (repoSlug && cloud.cloudName !== "local") {
     // Validate slug format (user/repo, no path traversal)
@@ -630,11 +631,12 @@ async function postInstall(
     } else {
       logStep("Cloning template repository...");
       const cloneResult = await asyncTryCatch(() =>
-        cloud.runner.runServer(`git clone https://github.com/${repoSlug}.git ~/project 2>&1 || true`),
+        cloud.runner.runServer(`git clone https://github.com/${repoSlug}.git ~/project`),
       );
       if (!cloneResult.ok) {
-        logWarn("Repo clone failed — continuing without template");
+        logWarn(`Repo clone failed (${getErrorMessage(cloneResult.error)}) — continuing without template`);
       } else {
+        repoCloned = true;
         const { readRemoteSpawnMd } = await import("./spawn-md.js");
         spawnMdConfig = await readRemoteSpawnMd(cloud.runner);
         if (spawnMdConfig) {
@@ -905,9 +907,12 @@ async function postInstall(
     headless: process.env.SPAWN_HEADLESS === "1",
   });
 
-  // When --repo is set, launch the agent inside the cloned project directory
+  // When --repo cloned successfully, launch the agent inside the cloned
+  // project directory. Gate on the actual clone outcome rather than the flag
+  // so an invalid slug or clone failure doesn't leave the agent trying to cd
+  // into a non-existent dir.
   const baseLaunchCmd = agent.launchCmd();
-  const launchCmd = repoSlug ? `cd ~/project && ${baseLaunchCmd}` : baseLaunchCmd;
+  const launchCmd = repoCloned ? `cd ~/project && ${baseLaunchCmd}` : baseLaunchCmd;
   saveLaunchCmd(launchCmd, spawnId);
 
   // In headless mode, provisioning is done — skip the interactive session.
