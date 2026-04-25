@@ -5,8 +5,10 @@
 import type { CloudOrchestrator } from "../shared/orchestrate.js";
 
 import { getErrorMessage } from "@openrouter/spawn-shared";
+import pkg from "../../package.json" with { type: "json" };
 import { shouldSkipCloudInit } from "../shared/cloud-init.js";
 import { DOCKER_CONTAINER_NAME, DOCKER_REGISTRY, makeDockerRunner, runOrchestration } from "../shared/orchestrate.js";
+import { initTelemetry } from "../shared/telemetry.js";
 import { logInfo, logStep, shellQuote } from "../shared/ui.js";
 import { agents, resolveAgent } from "./agents.js";
 import {
@@ -15,7 +17,6 @@ import {
   downloadFile,
   ensureHcloudToken,
   ensureSshKey,
-  findSpawnSnapshot,
   getConnectionInfo,
   getServerName,
   interactiveSession,
@@ -40,7 +41,6 @@ async function main() {
 
   let serverType = "";
   let location = "";
-  let snapshotId: string | null = null;
   let useDocker = false;
 
   // Check if --beta docker is active
@@ -84,18 +84,13 @@ async function main() {
         }
       }
 
-      // Check for a pre-built snapshot before provisioning
-      snapshotId = await findSpawnSnapshot(agentName);
-      if (snapshotId) {
-        cloud.skipAgentInstall = true;
-      }
       return await createHetznerServer(
         name,
         serverType,
         location,
         agent.cloudInitTier,
-        snapshotId ?? undefined,
-        useDocker && !snapshotId ? "docker-ce" : undefined,
+        undefined,
+        useDocker ? "docker-ce" : undefined,
       );
     },
     getServerName,
@@ -103,7 +98,6 @@ async function main() {
       if (
         shouldSkipCloudInit({
           useDocker,
-          snapshotId,
           skipCloudInit: cloud.skipCloudInit,
         })
       ) {
@@ -113,7 +107,7 @@ async function main() {
       }
 
       // Pull and start the agent Docker container after the server is ready
-      if (useDocker && !snapshotId) {
+      if (useDocker) {
         const image = `${DOCKER_REGISTRY}/spawn-${agentName}:latest`;
         logStep(`Pulling Docker image ${image}...`);
         await runServer(`docker pull ${image}`, 300);
@@ -132,6 +126,7 @@ async function main() {
   await runOrchestration(cloud, agent, agentName);
 }
 
+initTelemetry(pkg.version);
 main().catch((err) => {
   process.stderr.write(`\x1b[0;31mFatal: ${getErrorMessage(err)}\x1b[0m\n`);
   process.exit(1);

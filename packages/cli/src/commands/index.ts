@@ -6,8 +6,8 @@ export { cascadeDelete, cmdDelete } from "./delete.js";
 export { cmdExport } from "./export.js";
 // feedback.ts — cmdFeedback
 export { cmdFeedback } from "./feedback.js";
-// fix.ts — cmdFix, fixSpawn, buildFixScript
-export { buildFixScript, cmdFix, fixSpawn } from "./fix.js";
+// fix.ts — cmdFix, fixSpawn
+export { cmdFix, fixSpawn } from "./fix.js";
 // help.ts — cmdHelp
 export { cmdHelp } from "./help.js";
 // info.ts — cmdMatrix, cmdAgents, cmdClouds, cmdAgentInfo, cmdCloudInfo
@@ -60,6 +60,7 @@ export {
   getImplementedClouds,
   hasCloudCli,
   hasCloudCredentials,
+  isAuthEnvVarSet,
   isInteractiveTTY,
   levenshtein,
   loadManifestWithSpinner,

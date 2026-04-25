@@ -20,6 +20,7 @@ import {
 import { asyncTryCatch, isFileError, tryCatch, tryCatchIf } from "../shared/result.js";
 import { getLocalShell, isWindows } from "../shared/shell.js";
 import { maybeShowStarPrompt } from "../shared/star-prompt.js";
+import { captureEvent, setTelemetryContext } from "../shared/telemetry.js";
 import { logError, logInfo, logStep, prepareStdinForHandoff, toKebabCase } from "../shared/ui.js";
 import { promptSetupOptions, promptSpawnName } from "./interactive.js";
 import { handleRecordAction } from "./list.js";
@@ -742,17 +743,30 @@ export async function execScript(
     return true;
   }
 
-  // macOS/Linux: download the bash wrapper script and run via bash
-  const url = `https://openrouter.ai/labs/spawn/${cloud}/${agent}.sh`;
-  const ghUrl = `${RAW_BASE}/sh/${cloud}/${agent}.sh`;
+  // macOS/Linux: prefer the checked-in wrapper when running from a local checkout.
+  let scriptContent = "";
+  const cliDir = process.env.SPAWN_CLI_DIR;
+  const localScriptResolved = cliDir ? resolveLocalWrapperScript(cliDir, cloud, agent) : "";
 
-  const dlResult = await asyncTryCatch(() => downloadScriptWithFallback(url, ghUrl));
-  if (!dlResult.ok) {
-    reportDownloadError(ghUrl, dlResult.error);
-    return false;
+  if (localScriptResolved) {
+    scriptContent = fs.readFileSync(localScriptResolved, "utf-8");
+    if (debug) {
+      console.error(`[run] Using local script: ${localScriptResolved}`);
+    }
+  } else {
+    const url = `https://openrouter.ai/labs/spawn/${cloud}/${agent}.sh`;
+    const ghUrl = `${RAW_BASE}/sh/${cloud}/${agent}.sh`;
+
+    const dlResult = await asyncTryCatch(() => downloadScriptWithFallback(url, ghUrl));
+    if (!dlResult.ok) {
+      reportDownloadError(ghUrl, dlResult.error);
+      return false;
+    }
+
+    scriptContent = dlResult.data;
   }
 
-  const lastErr = runBashScript(dlResult.data, prompt, dashboardUrl, debug, spawnName);
+  const lastErr = runBashScript(scriptContent, prompt, dashboardUrl, debug, spawnName);
   if (lastErr) {
     reportScriptFailure(lastErr, cloud, agent, authHint, prompt, dashboardUrl, spawnName);
     return false;
@@ -829,6 +843,45 @@ function headlessError(
     outputFormat,
   );
   process.exit(exitCode);
+}
+
+/**
+ * Resolve a trusted local Spawn checkout path for SPAWN_CLI_DIR.
+ *
+ * On macOS, `/tmp` commonly resolves to `/private/tmp`, so compare against
+ * the checkout's real path instead of the raw env var spelling.
+ */
+function resolveTrustedCliDir(cliDir: string): string {
+  const resolvedCliDir = path.resolve(cliDir);
+  const realCliDir = tryCatchIf(isFileError, () => fs.realpathSync(resolvedCliDir));
+  return realCliDir.ok ? realCliDir.data : resolvedCliDir;
+}
+
+/**
+ * Resolve a checked-in shell wrapper from a trusted local Spawn checkout.
+ *
+ * This lets unreleased provider work run from the current branch instead of
+ * depending on the CDN / raw GitHub copy being published already.
+ */
+function resolveLocalWrapperScript(cliDir: string, cloud: string, agent: string): string {
+  const hasBadChars = (s: string) => s.includes("..") || s.includes("/") || s.includes("\\");
+  if (hasBadChars(cloud) || hasBadChars(agent)) {
+    return "";
+  }
+
+  const resolvedCliDir = resolveTrustedCliDir(cliDir);
+  const candidatePath = path.join(resolvedCliDir, "sh", cloud, `${agent}.sh`);
+  const realResult = tryCatchIf(isFileError, () => fs.realpathSync(candidatePath));
+  if (!realResult.ok) {
+    return "";
+  }
+
+  const prefix = resolvedCliDir.endsWith(path.sep) ? resolvedCliDir : resolvedCliDir + path.sep;
+  if (!realResult.data.startsWith(prefix)) {
+    return "";
+  }
+
+  return realResult.data;
 }
 
 /** Run a script in headless mode (all output to stderr, no interactive session) */
@@ -935,6 +988,13 @@ function runBundleHeadless(
 export async function cmdRunHeadless(agent: string, cloud: string, opts: HeadlessOptions = {}): Promise<void> {
   const { prompt, debug, outputFormat, spawnName } = opts;
 
+  // Funnel entry for headless runs. No picker to instrument — headless either
+  // validates and proceeds straight to runOrchestration, or it errors out.
+  // The orchestrate.ts funnel_* events cover the rest.
+  captureEvent("spawn_launched", {
+    mode: "headless",
+  });
+
   // Phase 1: Validate inputs (exit code 3)
   const validationResult = tryCatch(() => {
     validateIdentifier(agent, "Agent name");
@@ -1006,7 +1066,7 @@ export async function cmdRunHeadless(agent: string, cloud: string, opts: Headles
     if (cliDir) {
       const hasBadChars = (s: string) => s.includes("..") || s.includes("/") || s.includes("\\");
       if (!hasBadChars(resolvedCloud) && !hasBadChars(resolvedAgent)) {
-        const resolvedCliDir = path.resolve(cliDir);
+        const resolvedCliDir = resolveTrustedCliDir(cliDir);
         const candidatePath = path.join(resolvedCliDir, "packages", "cli", "src", resolvedCloud, "main.ts");
         const realResult = tryCatchIf(isFileError, () => fs.realpathSync(candidatePath));
         if (realResult.ok) {
@@ -1063,25 +1123,7 @@ export async function cmdRunHeadless(agent: string, cloud: string, opts: Headles
     // macOS/Linux: download bash wrapper script
     let scriptContent: string;
     const cliDir = process.env.SPAWN_CLI_DIR;
-    let localScriptResolved = "";
-
-    if (cliDir) {
-      const hasBadChars = (s: string) => s.includes("..") || s.includes("/") || s.includes("\\");
-      const safeCloud = !hasBadChars(resolvedCloud);
-      const safeAgent = !hasBadChars(resolvedAgent);
-
-      if (safeCloud && safeAgent) {
-        const resolvedCliDir = path.resolve(cliDir);
-        const candidatePath = path.join(resolvedCliDir, "sh", resolvedCloud, `${resolvedAgent}.sh`);
-        const realResult = tryCatchIf(isFileError, () => fs.realpathSync(candidatePath));
-        if (realResult.ok) {
-          const prefix = resolvedCliDir.endsWith(path.sep) ? resolvedCliDir : resolvedCliDir + path.sep;
-          if (realResult.data.startsWith(prefix)) {
-            localScriptResolved = realResult.data;
-          }
-        }
-      }
-    }
+    const localScriptResolved = cliDir ? resolveLocalWrapperScript(cliDir, resolvedCloud, resolvedAgent) : "";
 
     if (localScriptResolved) {
       scriptContent = fs.readFileSync(localScriptResolved, "utf-8");
@@ -1162,11 +1204,13 @@ export async function cmdRunHeadless(agent: string, cloud: string, opts: Headles
     if (conn.user && tryCatch(() => validateUsername(conn.user)).ok) {
       connectionFields.ssh_user = conn.user;
     }
-    if (conn.server_id && tryCatch(() => validateServerIdentifier(conn.server_id)).ok) {
-      connectionFields.server_id = conn.server_id;
+    const serverId = conn.server_id;
+    if (serverId && tryCatch(() => validateServerIdentifier(serverId)).ok) {
+      connectionFields.server_id = serverId;
     }
-    if (conn.server_name && tryCatch(() => validateServerIdentifier(conn.server_name)).ok) {
-      connectionFields.server_name = conn.server_name;
+    const serverName = conn.server_name;
+    if (serverName && tryCatch(() => validateServerIdentifier(serverName)).ok) {
+      connectionFields.server_name = serverName;
     }
   }
 
@@ -1194,6 +1238,13 @@ export async function cmdRun(
   dryRun?: boolean,
   debug?: boolean,
 ): Promise<void> {
+  // Funnel entry for the non-interactive `spawn <agent> <cloud>` path.
+  // mode distinguishes this from the interactive pickers so we can split the
+  // funnel by entry point in PostHog.
+  captureEvent("spawn_launched", {
+    mode: "direct",
+  });
+
   const manifest = await loadManifestWithSpinner();
   ({ agent, cloud } = resolveAndLog(manifest, agent, cloud));
 
@@ -1201,24 +1252,42 @@ export async function cmdRun(
   ({ agent, cloud } = detectAndFixSwappedArgs(manifest, agent, cloud));
   validateEntities(manifest, agent, cloud);
 
+  // Both arguments were pre-supplied — treat as implicit selection so the
+  // funnel has the same shape regardless of entry point.
+  captureEvent("agent_selected", {
+    agent,
+  });
+  captureEvent("cloud_selected", {
+    cloud,
+  });
+  setTelemetryContext("agent", agent);
+  setTelemetryContext("cloud", cloud);
+
   if (dryRun) {
     showDryRunPreview(manifest, agent, cloud, prompt);
     return;
   }
 
   await preflightCredentialCheck(manifest, cloud);
+  captureEvent("preflight_passed");
 
   // Skip setup prompt if steps already set via --steps or --config
   if (!process.env.SPAWN_ENABLED_STEPS) {
+    captureEvent("setup_options_shown");
     const enabledSteps = await promptSetupOptions(agent);
     if (enabledSteps) {
       process.env.SPAWN_ENABLED_STEPS = [
         ...enabledSteps,
       ].join(",");
+      captureEvent("setup_options_selected", {
+        step_count: enabledSteps.size,
+      });
     }
   }
 
+  captureEvent("name_prompt_shown");
   const spawnName = await promptSpawnName();
+  captureEvent("name_entered");
 
   // If a name was given, check whether an active instance with that name already
   // exists for this agent + cloud combination.  When it does, route the user into
@@ -1240,6 +1309,7 @@ export async function cmdRun(
   const cloudName = manifest.clouds[cloud].name;
   const suffix = prompt ? " with prompt..." : "...";
   p.log.step(`Launching ${pc.bold(agentName)} on ${pc.bold(cloudName)}${suffix}`);
+  captureEvent("picker_completed");
 
   const success = await execScript(
     cloud,

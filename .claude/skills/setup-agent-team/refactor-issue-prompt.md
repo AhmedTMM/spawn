@@ -17,7 +17,7 @@ If the issue has ANY of these labels: `discovery-team`, `cloud-proposal`, `agent
 Fetch the COMPLETE issue thread before starting:
 ```bash
 gh issue view SPAWN_ISSUE_PLACEHOLDER --repo OpenRouterTeam/spawn --comments
-gh pr list --repo OpenRouterTeam/spawn --search "SPAWN_ISSUE_PLACEHOLDER" --json number,title,url,state,headRefName
+gh pr list --repo OpenRouterTeam/spawn --search "SPAWN_ISSUE_PLACEHOLDER" --json number,title,url,state,headRefName,author | jq --slurpfile c <(jq -R . /tmp/spawn-collaborators-cache | jq -s .) '[.[] | select(.author.login as $a | $c[0] | index($a))]'
 ```
 For each linked PR: `gh pr view PR_NUM --repo OpenRouterTeam/spawn --comments`
 
@@ -28,7 +28,7 @@ Read ALL comments — prior discussion contains decisions, rejected approaches, 
 After gathering context, check if there is ALREADY a PR addressing this issue (open or recently merged):
 
 ```bash
-gh pr list --repo OpenRouterTeam/spawn --search "SPAWN_ISSUE_PLACEHOLDER" --state all --json number,title,url,state,headRefName
+gh pr list --repo OpenRouterTeam/spawn --search "SPAWN_ISSUE_PLACEHOLDER" --state all --json number,title,url,state,headRefName,author | jq --slurpfile c <(jq -R . /tmp/spawn-collaborators-cache | jq -s .) '[.[] | select(.author.login as $a | $c[0] | index($a))]'
 ```
 
 **If an OPEN PR exists:**
@@ -74,7 +74,7 @@ Track lifecycle: "pending-review" → "under-review" → "in-progress". Check la
 7. Keep pushing commits to the same branch as work progresses
 8. When fix is complete and tests pass: `gh pr ready NUMBER`, post update comment linking PR
 9. Do NOT close the issue — `Fixes #SPAWN_ISSUE_PLACEHOLDER` auto-closes on merge
-10. Clean up: `git worktree remove WORKTREE_BASE_PLACEHOLDER`, shutdown teammates
+10. Clean up: run `git worktree remove WORKTREE_BASE_PLACEHOLDER` and call `TeamDelete` in ONE turn, then output a plain-text summary with **NO further tool calls**. A text-only response ends the non-interactive session immediately.
 
 ## Commit Markers
 
@@ -84,5 +84,6 @@ Every commit: `Agent: issue-fixer` + `Co-Authored-By: Claude Sonnet 4.5 <noreply
 
 - Run tests after every change
 - If fix is not straightforward (>10 min), comment on issue explaining complexity and exit
+- **NO TOOLS AFTER TeamDelete.** After calling `TeamDelete`, do NOT call any other tool. Output plain text only to end the session. Any tool call after `TeamDelete` causes an infinite shutdown prompt loop in non-interactive (-p) mode. See issue #3103.
 
 Begin now. Fix issue #SPAWN_ISSUE_PLACEHOLDER.

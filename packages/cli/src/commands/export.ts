@@ -15,9 +15,10 @@ import { isString } from "@openrouter/spawn-shared";
 import pc from "picocolors";
 import * as v from "valibot";
 import { loadHistory } from "../history.js";
+import { loadManifest } from "../manifest.js";
 import { validateConnectionIP, validateIdentifier, validateUsername } from "../security.js";
 import { parseJsonWith } from "../shared/parse.js";
-import { tryCatch } from "../shared/result.js";
+import { asyncTryCatch, tryCatch } from "../shared/result.js";
 import { generateSpawnMd } from "../shared/spawn-md.js";
 import { SSH_BASE_OPTS } from "../shared/ssh.js";
 import { ensureSshKeys, getSshKeyOpts } from "../shared/ssh-keys.js";
@@ -196,10 +197,13 @@ export async function cmdExport(): Promise<void> {
     process.exit(1);
   }
 
+  const manifestResult = await asyncTryCatch(() => loadManifest());
+  const manifest = manifestResult.ok ? manifestResult.data : null;
+
   const options = records.map((r) => ({
     value: r,
     label: buildRecordLabel(r),
-    hint: buildRecordSubtitle(r),
+    hint: buildRecordSubtitle(r, manifest),
   }));
 
   const selected = await p.select({

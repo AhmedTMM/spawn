@@ -10,6 +10,7 @@ function getHelpUsageSection(): string {
   spawn <agent> <cloud> --size <type>  Set instance size/type (works for all clouds)
   spawn <agent> <cloud> --model <id>  Set the LLM model (e.g. openai/gpt-5.3-codex)
   spawn <agent> <cloud> --custom      Show interactive size/region pickers
+  spawn <agent> <cloud> --fast        Enable all speed optimizations (images, tarballs, parallel)
   spawn <agent> <cloud> --headless   Provision and exit (no interactive session)
   spawn <agent> <cloud> --output json
                                      Headless mode with structured JSON on stdout
@@ -32,7 +33,7 @@ function getHelpUsageSection(): string {
   spawn list -c <cloud>              Filter spawn history by cloud (or --cloud)
   spawn list --flat                  Show flat list (disable tree view)
   spawn list --json                  Output history as JSON
-  spawn list --clear                 Clear all spawn history
+  spawn list --clear                 Clear all spawn history (requires --yes non-interactively)
   spawn delete                       Delete a previously spawned server (aliases: rm, destroy, kill)
   spawn delete -a <agent>            Filter servers by agent
   spawn delete -c <cloud>            Filter servers by cloud
@@ -41,7 +42,7 @@ function getHelpUsageSection(): string {
   spawn status -a <agent>            Filter status by agent (or --agent)
   spawn status -c <cloud>            Filter status by cloud (or --cloud)
   spawn status --prune               Remove gone servers from history
-  spawn fix                          Re-run agent setup on an existing VM (re-inject credentials, reinstall)
+  spawn fix                          Full VM recovery (credentials, install, config, daemons)
   spawn fix <spawn-id>               Fix a specific spawn by name or ID
   spawn link <ip>                    Register an existing VM by IP (alias: reconnect)
   spawn link <ip> --agent <agent>    Specify the agent running on the VM
@@ -76,6 +77,7 @@ function getHelpExamplesSection(): string {
                                      ${pc.dim("# Use a specific machine type")}
   spawn codex gcp --model openai/gpt-5.3-codex
                                      ${pc.dim("# Override the default LLM model")}
+  spawn claude sprite --fast           ${pc.dim("# Fastest provisioning (images + tarballs + parallel)")}
   spawn opencode gcp --dry-run       ${pc.dim("# Preview without provisioning")}
   spawn claude hetzner --headless    ${pc.dim("# Provision, print connection info, exit")}
   spawn claude hetzner --output json ${pc.dim("# Structured JSON output on stdout")}

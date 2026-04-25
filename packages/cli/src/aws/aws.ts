@@ -899,6 +899,7 @@ export async function ensureSshKey(): Promise<void> {
 
 function getCloudInitUserdata(tier: CloudInitTier = "full"): string {
   const packages = getPackagesForTier(tier);
+  const quotedPackages = packages.map((p) => shellQuote(p)).join(" ");
   const lines = [
     "#!/bin/bash",
     "export DEBIAN_FRONTEND=noninteractive",
@@ -908,7 +909,7 @@ function getCloudInitUserdata(tier: CloudInitTier = "full"): string {
     "  chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile",
     "fi",
     "apt-get update -y",
-    `apt-get install -y --no-install-recommends ${packages.join(" ")}`,
+    `apt-get install -y --no-install-recommends ${quotedPackages}`,
   ];
   if (needsNode(tier)) {
     lines.push(
@@ -1178,15 +1179,15 @@ export async function uploadFile(localPath: string, remotePath: string): Promise
 }
 
 export async function downloadFile(remotePath: string, localPath: string): Promise<void> {
-  const normalizedRemote = validateRemotePath(remotePath, /^[a-zA-Z0-9/_.~$-]+$/);
+  const expandedRemote = remotePath.replace(/^\$HOME\//, "~/");
+  const normalizedRemote = validateRemotePath(expandedRemote, /^[a-zA-Z0-9/_.~-]+$/);
   const keyOpts = getSshKeyOpts(await ensureSshKeys());
-  const expandedPath = normalizedRemote.replace(/^\$HOME/, "~");
   const proc = Bun.spawn(
     [
       "scp",
       ...SSH_BASE_OPTS,
       ...keyOpts,
-      `${SSH_USER}@${_state.instanceIp}:${expandedPath}`,
+      `${SSH_USER}@${_state.instanceIp}:${normalizedRemote}`,
       localPath,
     ],
     {
@@ -1234,7 +1235,8 @@ export async function interactiveSession(cmd: string): Promise<number> {
   logInfo("To delete from CLI:");
   logInfo("  spawn delete");
   logInfo("To reconnect:");
-  logInfo(`  ssh ${SSH_USER}@${_state.instanceIp}`);
+  logInfo("  spawn last");
+  logInfo(`  or: ssh ${SSH_USER}@${_state.instanceIp}`);
 
   return exitCode;
 }

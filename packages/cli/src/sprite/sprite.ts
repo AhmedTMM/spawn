@@ -657,10 +657,10 @@ export async function uploadFileSprite(localPath: string, remotePath: string): P
 
 /** Download a file from the remote sprite by catting it to stdout. */
 export async function downloadFileSprite(remotePath: string, localPath: string): Promise<void> {
-  const normalizedRemote = validateRemotePath(remotePath, /^[a-zA-Z0-9/_.~$-]+$/);
+  const expandedRemote = remotePath.replace(/^\$HOME\//, "~/");
+  const normalizedRemote = validateRemotePath(expandedRemote, /^[a-zA-Z0-9/_.~-]+$/);
 
   const spriteCmd = getSpriteCmd()!;
-  const expandedPath = normalizedRemote.replace(/^\$HOME/, "~");
 
   await spriteRetry("sprite download", async () => {
     const proc = Bun.spawn(
@@ -672,7 +672,7 @@ export async function downloadFileSprite(remotePath: string, localPath: string):
         _state.name,
         "--",
         "cat",
-        expandedPath,
+        normalizedRemote,
       ],
       {
         stdio: [
@@ -789,7 +789,8 @@ export async function interactiveSession(cmd: string, spawnFn?: (args: string[])
   logInfo("To destroy:");
   logInfo(`  sprite destroy ${_state.name}`);
   logInfo("To reconnect:");
-  logInfo(`  sprite console -s ${_state.name}`);
+  logInfo("  spawn last");
+  logInfo(`  or: sprite console -s ${_state.name}`);
 
   return exitCode;
 }

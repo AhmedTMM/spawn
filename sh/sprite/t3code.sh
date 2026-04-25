@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eo pipefail
 
-# Thin shim: ensures bun is available, runs bundled aws.js (local or from GitHub release)
+# Thin shim: ensures bun is available, runs bundled sprite.js (local or from GitHub release)
 
 _ensure_bun() {
     if command -v bun &>/dev/null; then return 0; fi
@@ -14,13 +14,13 @@ _ensure_bun() {
 _ensure_bun
 
 # SPAWN_CLI_DIR override — force local source (used by e2e tests)
-if [[ -n "${SPAWN_CLI_DIR:-}" && -f "$SPAWN_CLI_DIR/packages/cli/src/aws/main.ts" ]]; then
-    exec bun run "$SPAWN_CLI_DIR/packages/cli/src/aws/main.ts" zeroclaw "$@"
+if [[ -n "${SPAWN_CLI_DIR:-}" && -f "$SPAWN_CLI_DIR/packages/cli/src/sprite/main.ts" ]]; then
+    exec bun run "$SPAWN_CLI_DIR/packages/cli/src/sprite/main.ts" t3code "$@"
 fi
 
 # Remote — download and run compiled TypeScript bundle
-AWS_JS=$(mktemp)
-trap 'rm -f "$AWS_JS"' EXIT
-curl -fsSL --proto '=https' "https://github.com/OpenRouterTeam/spawn/releases/download/aws-latest/aws.js" -o "$AWS_JS" \
-    || { printf '\033[0;31mFailed to download aws.js\033[0m\n' >&2; exit 1; }
-exec bun run "$AWS_JS" zeroclaw "$@"
+SPRITE_JS=$(mktemp)
+trap 'rm -f "$SPRITE_JS"' EXIT
+curl -fsSL --proto '=https' "https://github.com/OpenRouterTeam/spawn/releases/download/sprite-latest/sprite.js" -o "$SPRITE_JS" \
+    || { printf '\033[0;31mFailed to download sprite.js\033[0m\n' >&2; exit 1; }
+exec bun run "$SPRITE_JS" t3code "$@"

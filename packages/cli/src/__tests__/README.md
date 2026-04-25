@@ -91,7 +91,7 @@ bun test src/__tests__/manifest.test.ts
 - `paths.test.ts` — `getSpawnDir`, `getCacheDir`, `getHistoryPath`, `getSshDir`, path resolution
 - `ssh-keys.test.ts` — SSH key discovery, generation, fingerprinting
 - `update-check.test.ts` — Auto-update check logic
-- `auto-update.test.ts` — `setupAutoUpdate`: systemd service unit generation and orchestration integration
+- `auto-update.test.ts` — `setupAutoUpdate`: systemd service unit generation and orchestration integration; `setupSecurityScan`: cron-based security heuristics and orchestration integration
 - `kill-with-timeout.test.ts` — `killWithTimeout`: SIGKILL after grace period, already-exited process handling
 - `with-retry-result.test.ts` — `withRetry`, `wrapSshCall`, Result constructors
 - `orchestrate.test.ts` — `runOrchestration`
@@ -118,9 +118,12 @@ bun test src/__tests__/manifest.test.ts
 - `check-entity.test.ts` / `check-entity-messages.test.ts` — Entity validation
 - `agent-tarball.test.ts` — `tryTarballInstall`: GitHub Release tarball install, fallback, URL validation
 - `gateway-resilience.test.ts` — `startGateway` systemd unit with auto-restart and cron heartbeat
+- `hermes-dashboard.test.ts` — `startHermesDashboard` session-scoped `hermes dashboard` launch on :9119 with setsid/nohup
 - `digitalocean-token.test.ts` — DigitalOcean token storage, retrieval, and API client helpers
 - `do-min-size.test.ts` — DigitalOcean minimum droplet size enforcement: `slugRamGb` RAM comparison, `AGENT_MIN_SIZE` map
-- `do-payment-warning.test.ts` — `ensureDoToken` proactive payment method reminder for first-time DigitalOcean users
+- `do-payment-warning.test.ts` — `ensureDoToken` does not preemptively warn about payment; billing URL covered via `handleBillingError` tests
+- `readiness-checklist.test.ts` — `checklistLineStatus` mapping for DigitalOcean readiness rows
+- `readiness.test.ts` — `sortBlockers` resolution order for DigitalOcean readiness blockers
 - `do-snapshot.test.ts` — `findSpawnSnapshot`: DigitalOcean snapshot lookup, filtering, error handling
 - `hetzner-pagination.test.ts` — Hetzner API pagination: multi-page server listing and cursor handling
 - `sprite-keep-alive.test.ts` — `installSpriteKeepAlive` download/install, graceful failure, session script wrapping

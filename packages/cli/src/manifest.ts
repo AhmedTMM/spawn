@@ -43,6 +43,8 @@ export interface AgentDef {
   category?: string;
   tagline?: string;
   tags?: string[];
+  disabled?: boolean;
+  disabled_reason?: string;
 }
 
 export interface CloudDef {
@@ -60,10 +62,51 @@ export interface CloudDef {
   icon?: string;
 }
 
+/** MCP server configuration (matches Claude Code settings.json mcpServers format). */
+export interface McpServerConfig {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+}
+
+/** Per-agent skill configuration. */
+export interface SkillAgentConfig {
+  mcp_config?: McpServerConfig;
+  /** Remote path for instruction-type skills (e.g. ~/.claude/skills/git-workflow/SKILL.md). */
+  instruction_path?: string;
+  /** Whether this skill is pre-selected in the picker for this agent. */
+  default: boolean;
+}
+
+/** A skill that can be pre-installed on a remote VM. */
+export interface SkillDef {
+  name: string;
+  description: string;
+  type: "mcp" | "instruction" | "config";
+  /** npm package name (for MCP-type skills). */
+  package?: string;
+  /** YAML frontmatter + markdown content (for instruction-type skills). */
+  content?: string;
+  /** Env vars required by this skill (shown as hints in picker). */
+  env_vars?: string[];
+  /** Prerequisites for installation. */
+  prerequisites?: {
+    apt?: string[];
+    commands?: string[];
+    env_vars?: string[];
+  };
+  /** Whether this skill works on headless VMs (no browser for OAuth). */
+  headless_compatible?: boolean;
+  /** Per-agent installation config. Only agents listed here support this skill. */
+  agents: Record<string, SkillAgentConfig>;
+}
+
 export interface Manifest {
   agents: Record<string, AgentDef>;
   clouds: Record<string, CloudDef>;
   matrix: Record<string, string>;
+  /** Skill catalog — populated by discovery scout, installed via --beta skills. */
+  skills?: Record<string, SkillDef>;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -74,8 +117,7 @@ const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main` as const;
 const SPAWN_CDN = "https://openrouter.ai/labs/spawn" as const;
 /** Static URL for version checks — GitHub release artifact, never changes with repo structure */
 const VERSION_URL = `https://github.com/${REPO}/releases/download/cli-latest/version` as const;
-const CACHE_TTL = 3600; // 1 hour in seconds
-const FETCH_TIMEOUT = 10_000; // 10 seconds
+const FETCH_TIMEOUT = 3_000; // 3 seconds — fast fallback on bad wifi
 
 // ── Cache helpers ──────────────────────────────────────────────────────────────
 
@@ -193,13 +235,6 @@ async function fetchManifestFromGitHub(): Promise<Manifest | null> {
 let _cached: Manifest | null = null;
 let _staleCache = false;
 
-function tryLoadFromDiskCache(): Manifest | null {
-  if (cacheAge() >= CACHE_TTL) {
-    return null;
-  }
-  return readCache();
-}
-
 function updateCache(manifest: Manifest): Manifest {
   writeCache(manifest);
   _cached = manifest;
@@ -244,17 +279,7 @@ export async function loadManifest(forceRefresh = false): Promise<Manifest> {
     return local;
   }
 
-  // Check disk cache first if not forcing refresh
-  if (!forceRefresh) {
-    const cached = tryLoadFromDiskCache();
-    if (cached) {
-      _cached = cached;
-      _staleCache = false;
-      return cached;
-    }
-  }
-
-  // Fetch from GitHub
+  // Always fetch fresh from GitHub — disk cache is offline-only fallback.
   const fetched = await fetchManifestFromGitHub();
   if (fetched) {
     return updateCache(fetched);
@@ -280,7 +305,9 @@ export async function loadManifest(forceRefresh = false): Promise<Manifest> {
 }
 
 export function agentKeys(m: Manifest): string[] {
-  return Object.keys(m.agents).sort((a, b) => (m.agents[b].github_stars ?? 0) - (m.agents[a].github_stars ?? 0));
+  return Object.keys(m.agents)
+    .filter((k) => !m.agents[k].disabled)
+    .sort((a, b) => (m.agents[b].github_stars ?? 0) - (m.agents[a].github_stars ?? 0));
 }
 
 export function cloudKeys(m: Manifest): string[] {

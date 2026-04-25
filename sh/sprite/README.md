@@ -16,12 +16,6 @@ bash <(curl -fsSL https://openrouter.ai/labs/spawn/sprite/claude.sh)
 bash <(curl -fsSL https://openrouter.ai/labs/spawn/sprite/openclaw.sh)
 ```
 
-#### ZeroClaw
-
-```bash
-bash <(curl -fsSL https://openrouter.ai/labs/spawn/sprite/zeroclaw.sh)
-```
-
 #### Codex CLI
 
 ```bash
@@ -56,6 +50,18 @@ bash <(curl -fsSL https://openrouter.ai/labs/spawn/sprite/junie.sh)
 
 ```bash
 bash <(curl -fsSL https://openrouter.ai/labs/spawn/sprite/cursor.sh)
+```
+
+#### Pi
+
+```bash
+bash <(curl -fsSL https://openrouter.ai/labs/spawn/sprite/pi.sh)
+```
+
+#### T3 Code
+
+```bash
+bash <(curl -fsSL https://openrouter.ai/labs/spawn/sprite/t3code.sh)
 ```
 
 ## Non-Interactive Mode

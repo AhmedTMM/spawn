@@ -66,20 +66,33 @@ function defaultSshCommand(host: string, user: string, keyOpts: string[], cmd: s
 const KNOWN_AGENTS = [
   "claude",
   "openclaw",
-  "zeroclaw",
   "codex",
   "opencode",
   "kilocode",
   "hermes",
   "junie",
+  "pi",
+  "cursor",
 ] as const;
 type KnownAgent = (typeof KNOWN_AGENTS)[number];
+
+/** Map manifest agent key → CLI binary name (only where they differ). */
+const AGENT_BINARY: Partial<Record<KnownAgent, string>> = {
+  cursor: "agent",
+};
+
+/** Get the CLI binary name for an agent (defaults to the agent key itself). */
+function agentBinary(agent: KnownAgent): string {
+  return AGENT_BINARY[agent] ?? agent;
+}
 
 /** Auto-detect which agent is installed/running on the remote host. */
 function detectAgent(host: string, user: string, keyOpts: string[], runCmd: SshCommandFn): string | null {
   // First: check running processes
+  // Note: cursor's binary is "agent" which is too generic for ps grep, so it's
+  // detected only via the installed-binary check below.
   const psCmd =
-    "ps aux 2>/dev/null | grep -oE 'claude(-code)?|openclaw|zeroclaw|codex|opencode|kilocode|hermes|junie' | grep -v grep | head -1 || true";
+    "ps aux 2>/dev/null | grep -oE 'claude(-code)?|openclaw|codex|opencode|kilocode|hermes|junie|pi' | grep -v grep | head -1 || true";
   const psOut = runCmd(host, user, keyOpts, psCmd);
   if (psOut) {
     const match = KNOWN_AGENTS.find((b: KnownAgent) => psOut.includes(b));
@@ -88,13 +101,11 @@ function detectAgent(host: string, user: string, keyOpts: string[], runCmd: SshC
     }
   }
 
-  // Second: check installed binaries
-  const whichCmd = KNOWN_AGENTS.map((b) => `(which ${b} 2>/dev/null && echo ${b})`).join(" || ");
-  const whichOut = runCmd(host, user, keyOpts, whichCmd);
-  if (whichOut) {
-    const match = KNOWN_AGENTS.find((b: KnownAgent) => whichOut.includes(b));
-    if (match) {
-      return match;
+  // Second: check installed binaries — one SSH call per agent to avoid shell injection
+  for (const agent of KNOWN_AGENTS) {
+    const whichOut = runCmd(host, user, keyOpts, `command -v ${agentBinary(agent)}`);
+    if (whichOut) {
+      return agent;
     }
   }
 
@@ -436,7 +447,11 @@ export async function cmdLink(args: string[], options?: LinkOptions): Promise<vo
         ...keyOpts,
         `${sshUser}@${ip}`,
       ];
-      spawnInteractive(sshArgs);
+      const exitCode = spawnInteractive(sshArgs);
+      if (exitCode !== 0) {
+        p.log.warn(`SSH exited with code ${exitCode}. The server is still linked.`);
+        p.log.info(`Try manually: ${pc.cyan(`ssh ${sshUser}@${ip}`)}`);
+      }
     }
   }
 

@@ -8,7 +8,9 @@ import { getAgentOptionalSteps } from "../shared/agents.js";
 import { hasSavedOpenRouterKey } from "../shared/oauth.js";
 import { asyncTryCatch, tryCatch, unwrapOr } from "../shared/result.js";
 import { maybeShowStarPrompt } from "../shared/star-prompt.js";
+import { captureEvent, setTelemetryContext } from "../shared/telemetry.js";
 import { validateModelId } from "../shared/ui.js";
+import { cmdLink } from "./link.js";
 import { activeServerPicker } from "./list.js";
 import { execScript, showDryRunPreview } from "./run.js";
 import {
@@ -78,20 +80,57 @@ function getAndValidateCloudChoices(
   };
 }
 
-// Prompt user to select a cloud with arrow-key navigation
+// Prompt user to select a cloud with arrow-key navigation.
+// When --beta sandbox is active and "local" is in the list, injects a
+// "Local Machine (Sandboxed)" option right after "Local Machine".
 async function selectCloud(
   manifest: Manifest,
   cloudList: string[],
   hintOverrides: Record<string, string>,
 ): Promise<string> {
+  const betaFeatures = (process.env.SPAWN_BETA ?? "").split(",");
+  const sandboxEnabled = betaFeatures.includes("sandbox");
+
+  const options = mapToSelectOptions(cloudList, manifest.clouds, hintOverrides);
+
+  // Inject sandbox option next to "local" when --beta sandbox is set
+  if (sandboxEnabled && cloudList.includes("local")) {
+    const localIdx = options.findIndex((o) => o.value === "local");
+    if (localIdx !== -1) {
+      options[localIdx].hint = "No isolation — runs on your machine";
+      options.splice(localIdx + 1, 0, {
+        value: "local-sandbox",
+        label: "Local Machine (Sandboxed)",
+        hint: "Runs in a Docker container",
+      });
+    }
+  }
+
+  // Add "Link Existing Server" option at the bottom for BYOS workflow
+  options.push({
+    value: "link-existing",
+    label: "Link Existing Server",
+    hint: "bring your own server via IP address",
+  });
+
   const cloudChoice = await p.select({
     message: "Select a cloud",
-    options: mapToSelectOptions(cloudList, manifest.clouds, hintOverrides),
+    options,
     initialValue: cloudList[0],
   });
   if (p.isCancel(cloudChoice)) {
     handleCancel();
   }
+
+  // Map synthetic "local-sandbox" back to "local" and ensure sandbox beta is set
+  if (cloudChoice === "local-sandbox") {
+    const existing = process.env.SPAWN_BETA ?? "";
+    if (!existing.split(",").includes("sandbox")) {
+      process.env.SPAWN_BETA = existing ? `${existing},sandbox` : "sandbox";
+    }
+    return "local";
+  }
+
   return cloudChoice;
 }
 
@@ -214,15 +253,45 @@ async function promptSetupOptions(agentName: string): Promise<Set<string> | unde
   return stepSet;
 }
 
+/** Show the skills picker if --beta skills is active and the agent has skills available. */
+async function maybePromptSkills(manifest: Manifest, agentName: string): Promise<void> {
+  if (process.env.SPAWN_SELECTED_SKILLS) {
+    return;
+  }
+  const betaFeatures = (process.env.SPAWN_BETA ?? "").split(",").filter(Boolean);
+  if (!betaFeatures.includes("skills")) {
+    return;
+  }
+  const { promptSkillSelection, collectSkillEnvVars } = await import("../shared/skills.js");
+  const selectedSkills = await promptSkillSelection(manifest, agentName);
+  if (selectedSkills && selectedSkills.length > 0) {
+    process.env.SPAWN_SELECTED_SKILLS = selectedSkills.join(",");
+    const envPairs = await collectSkillEnvVars(manifest, selectedSkills);
+    if (envPairs.length > 0) {
+      const existing = process.env.SPAWN_SKILL_ENV_PAIRS ?? "";
+      process.env.SPAWN_SKILL_ENV_PAIRS = existing ? `${existing},${envPairs.join(",")}` : envPairs.join(",");
+    }
+  }
+}
+
 export { getAndValidateCloudChoices, promptSetupOptions, promptSpawnName, selectCloud };
 
 export async function cmdInteractive(): Promise<void> {
   p.intro(pc.inverse(` spawn v${VERSION} `));
 
+  // Funnel entry — fires BEFORE any prompt so we catch users who bail at
+  // the very first screen. See also: funnel_* events in orchestrate.ts.
+  captureEvent("spawn_launched", {
+    mode: "interactive",
+  });
+
   // If the user has existing spawns, offer a top-level menu so they can
   // reconnect without knowing about `spawn list` or `spawn last`.
   const activeServers = getActiveServers();
   if (activeServers.length > 0) {
+    captureEvent("menu_shown", {
+      active_servers: activeServers.length,
+    });
     const topChoice = await p.select({
       message: "What would you like to do?",
       options: [
@@ -237,8 +306,12 @@ export async function cmdInteractive(): Promise<void> {
       ],
     });
     if (p.isCancel(topChoice)) {
+      captureEvent("menu_cancelled");
       handleCancel();
     }
+    captureEvent("menu_selected", {
+      choice: String(topChoice),
+    });
     if (topChoice === "connect") {
       const manifestResult = await asyncTryCatch(() => loadManifestWithSpinner());
       const manifest = manifestResult.ok ? manifestResult.data : null;
@@ -248,30 +321,64 @@ export async function cmdInteractive(): Promise<void> {
   }
 
   const manifest = await loadManifestWithSpinner();
+  captureEvent("agent_picker_shown");
   const agentChoice = await selectAgent(manifest);
+  captureEvent("agent_selected", {
+    agent: agentChoice,
+  });
+  setTelemetryContext("agent", agentChoice);
 
   const { clouds, hintOverrides } = getAndValidateCloudChoices(manifest, agentChoice);
+  captureEvent("cloud_picker_shown");
   const cloudChoice = await selectCloud(manifest, clouds, hintOverrides);
+  captureEvent("cloud_selected", {
+    cloud: cloudChoice,
+  });
+  setTelemetryContext("cloud", cloudChoice);
+
+  // Handle "Link Existing Server" — redirect to spawn link with the agent pre-selected
+  if (cloudChoice === "link-existing") {
+    p.outro("Switching to link mode...");
+    await cmdLink([
+      "link",
+      "--agent",
+      agentChoice,
+    ]);
+    return;
+  }
 
   await preflightCredentialCheck(manifest, cloudChoice);
+  captureEvent("preflight_passed");
 
   // Skip setup prompt if steps already set via --steps or --config
   if (!process.env.SPAWN_ENABLED_STEPS) {
+    captureEvent("setup_options_shown");
     const enabledSteps = await promptSetupOptions(agentChoice);
     if (enabledSteps) {
       process.env.SPAWN_ENABLED_STEPS = [
         ...enabledSteps,
       ].join(",");
+      captureEvent("setup_options_selected", {
+        step_count: enabledSteps.size,
+      });
     }
   }
 
+  // Skills picker (--beta skills)
+  await maybePromptSkills(manifest, agentChoice);
+
+  captureEvent("name_prompt_shown");
   const spawnName = await promptSpawnName();
+  // promptSpawnName cancels via handleCancel() on its own path if the user
+  // bails; if we reach this line the name was entered successfully.
+  captureEvent("name_entered");
 
   const agentName = manifest.agents[agentChoice].name;
   const cloudName = manifest.clouds[cloudChoice].name;
   p.log.step(`Launching ${pc.bold(agentName)} on ${pc.bold(cloudName)}`);
   p.log.info(`Next time, run directly: ${pc.cyan(`spawn ${agentChoice} ${cloudChoice}`)}`);
   p.outro("Handing off to spawn script...");
+  captureEvent("picker_completed");
 
   const success = await execScript(
     cloudChoice,
@@ -291,10 +398,19 @@ export async function cmdInteractive(): Promise<void> {
 export async function cmdAgentInteractive(agent: string, prompt?: string, dryRun?: boolean): Promise<void> {
   p.intro(pc.inverse(` spawn v${VERSION} `));
 
+  // Same funnel entry as cmdInteractive — mode distinguishes the short-form
+  // (`spawn claude`) entry point from the full interactive picker.
+  captureEvent("spawn_launched", {
+    mode: "agent_interactive",
+  });
+
   const manifest = await loadManifestWithSpinner();
   const resolvedAgent = resolveAgentKey(manifest, agent);
 
   if (!resolvedAgent) {
+    captureEvent("agent_invalid", {
+      raw: agent,
+    });
     const agentMatch = findClosestKeyByNameOrKey(agent, agentKeys(manifest), (k) => manifest.agents[k].name);
     p.log.error(`Unknown agent: ${pc.bold(agent)}`);
     if (agentMatch) {
@@ -304,8 +420,30 @@ export async function cmdAgentInteractive(agent: string, prompt?: string, dryRun
     process.exit(1);
   }
 
+  // Agent was pre-supplied on the command line — treat as implicitly selected.
+  captureEvent("agent_selected", {
+    agent: resolvedAgent,
+  });
+  setTelemetryContext("agent", resolvedAgent);
+
   const { clouds, hintOverrides } = getAndValidateCloudChoices(manifest, resolvedAgent);
+  captureEvent("cloud_picker_shown");
   const cloudChoice = await selectCloud(manifest, clouds, hintOverrides);
+  captureEvent("cloud_selected", {
+    cloud: cloudChoice,
+  });
+  setTelemetryContext("cloud", cloudChoice);
+
+  // Handle "Link Existing Server" — redirect to spawn link with the agent pre-selected
+  if (cloudChoice === "link-existing") {
+    p.outro("Switching to link mode...");
+    await cmdLink([
+      "link",
+      "--agent",
+      resolvedAgent,
+    ]);
+    return;
+  }
 
   if (dryRun) {
     showDryRunPreview(manifest, resolvedAgent, cloudChoice, prompt);
@@ -313,24 +451,32 @@ export async function cmdAgentInteractive(agent: string, prompt?: string, dryRun
   }
 
   await preflightCredentialCheck(manifest, cloudChoice);
+  captureEvent("preflight_passed");
 
   // Skip setup prompt if steps already set via --steps or --config
   if (!process.env.SPAWN_ENABLED_STEPS) {
+    captureEvent("setup_options_shown");
     const enabledSteps = await promptSetupOptions(resolvedAgent);
     if (enabledSteps) {
       process.env.SPAWN_ENABLED_STEPS = [
         ...enabledSteps,
       ].join(",");
+      captureEvent("setup_options_selected", {
+        step_count: enabledSteps.size,
+      });
     }
   }
 
+  captureEvent("name_prompt_shown");
   const spawnName = await promptSpawnName();
+  captureEvent("name_entered");
 
   const agentName = manifest.agents[resolvedAgent].name;
   const cloudName = manifest.clouds[cloudChoice].name;
   p.log.step(`Launching ${pc.bold(agentName)} on ${pc.bold(cloudName)}`);
   p.log.info(`Next time, run directly: ${pc.cyan(`spawn ${resolvedAgent} ${cloudChoice}`)}`);
   p.outro("Handing off to spawn script...");
+  captureEvent("picker_completed");
 
   const success = await execScript(
     cloudChoice,

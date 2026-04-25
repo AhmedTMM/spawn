@@ -693,12 +693,20 @@ function getStartupScript(tier: CloudInitTier = "full"): string {
   assertSafeUsername(resolveUsername());
 
   const packages = getPackagesForTier(tier);
+  const quotedPackages = packages.map((p) => shellQuote(p)).join(" ");
   const lines = [
     "#!/bin/bash",
     "export HOME=/root",
     "export DEBIAN_FRONTEND=noninteractive",
     "apt-get update -y",
-    `apt-get install -y --no-install-recommends ${packages.join(" ")}`,
+    `apt-get install -y --no-install-recommends ${quotedPackages}`,
+    "# Install GitHub CLI (gh) via official APT repo — baked into cloud-init",
+    "# so it's available before post-provision SSH (avoids race condition #3206)",
+    'curl -fsSL --proto "=https" https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null',
+    "chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg",
+    'printf "deb [arch=%s signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\\n" "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/github-cli.list',
+    "apt-get update -qq",
+    "apt-get install -y --no-install-recommends gh",
   ];
   if (needsNode(tier)) {
     lines.push(
@@ -1028,10 +1036,9 @@ export async function uploadFile(localPath: string, remotePath: string): Promise
     logError(`Invalid local path: ${localPath}`);
     throw new Error("Invalid local path");
   }
-  const normalizedRemote = validateRemotePath(remotePath, /^[a-zA-Z0-9/_.~$-]+$/);
+  const expandedRemote = remotePath.replace(/^\$HOME\//, "~/");
+  const normalizedRemote = validateRemotePath(expandedRemote, /^[a-zA-Z0-9/_.~-]+$/);
   const username = resolveUsername();
-  // Expand $HOME on remote side
-  const expandedPath = normalizedRemote.replace(/^\$HOME/, "~");
   const keyOpts = getSshKeyOpts(await ensureSshKeys());
 
   const proc = Bun.spawn(
@@ -1040,7 +1047,7 @@ export async function uploadFile(localPath: string, remotePath: string): Promise
       ...SSH_BASE_OPTS,
       ...keyOpts,
       localPath,
-      `${username}@${_state.serverIp}:${expandedPath}`,
+      `${username}@${_state.serverIp}:${normalizedRemote}`,
     ],
     {
       stdio: [
@@ -1067,9 +1074,9 @@ export async function downloadFile(remotePath: string, localPath: string): Promi
     logError(`Invalid local path: ${localPath}`);
     throw new Error("Invalid local path");
   }
-  const normalizedRemote = validateRemotePath(remotePath, /^[a-zA-Z0-9/_.~$-]+$/);
+  const expandedRemote = remotePath.replace(/^\$HOME\//, "~/");
+  const normalizedRemote = validateRemotePath(expandedRemote, /^[a-zA-Z0-9/_.~-]+$/);
   const username = resolveUsername();
-  const expandedPath = normalizedRemote.replace(/^\$HOME/, "~");
   const keyOpts = getSshKeyOpts(await ensureSshKeys());
 
   const proc = Bun.spawn(
@@ -1077,7 +1084,7 @@ export async function downloadFile(remotePath: string, localPath: string): Promi
       "scp",
       ...SSH_BASE_OPTS,
       ...keyOpts,
-      `${username}@${_state.serverIp}:${expandedPath}`,
+      `${username}@${_state.serverIp}:${normalizedRemote}`,
       localPath,
     ],
     {
@@ -1129,7 +1136,8 @@ export async function interactiveSession(cmd: string): Promise<number> {
   logInfo("To delete from CLI:");
   logInfo("  spawn delete");
   logInfo("To reconnect:");
-  logInfo(`  gcloud compute ssh ${_state.instanceName} --zone=${_state.zone} --project=${_state.project}`);
+  logInfo("  spawn last");
+  logInfo(`  or: gcloud compute ssh ${_state.instanceName} --zone=${_state.zone} --project=${_state.project}`);
 
   return exitCode;
 }

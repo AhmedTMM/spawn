@@ -10,7 +10,7 @@
 
 import type { SpawnRecord } from "../history";
 
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { tryCatch } from "@openrouter/spawn-shared";
 import { createMockManifest, mockClackPrompts } from "./test-helpers";
 
@@ -51,11 +51,23 @@ function makeRecord(overrides: Partial<SpawnRecord> = {}): SpawnRecord {
 // ── Tests: fixSpawn edge cases ──────────────────────────────────────────────
 
 describe("fixSpawn (additional coverage)", () => {
+  let savedApiKey: string | undefined;
+
   beforeEach(() => {
+    savedApiKey = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = "sk-or-test-fix-key";
     clack.logError.mockReset();
     clack.logInfo.mockReset();
     clack.logSuccess.mockReset();
     clack.logStep.mockReset();
+  });
+
+  afterEach(() => {
+    if (savedApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = savedApiKey;
+    }
   });
 
   it("shows error for invalid server_name in connection", async () => {
@@ -109,7 +121,6 @@ describe("fixSpawn (additional coverage)", () => {
   });
 
   it("uses record name for label when server_name is absent", async () => {
-    const mockRunner = mock(async () => true);
     const record = makeRecord({
       name: "custom-name",
       connection: {
@@ -119,13 +130,16 @@ describe("fixSpawn (additional coverage)", () => {
       },
     });
     await fixSpawn(record, mockManifest, {
-      runScript: mockRunner,
+      makeRunner: () => ({
+        runServer: mock(async () => {}),
+        uploadFile: mock(async () => {}),
+        downloadFile: mock(async () => {}),
+      }),
     });
     expect(clack.logStep).toHaveBeenCalledWith(expect.stringContaining("custom-name"));
   });
 
   it("uses IP for label when no name or server_name", async () => {
-    const mockRunner = mock(async () => true);
     const record = makeRecord({
       name: undefined,
       connection: {
@@ -135,27 +149,23 @@ describe("fixSpawn (additional coverage)", () => {
       },
     });
     await fixSpawn(record, mockManifest, {
-      runScript: mockRunner,
+      makeRunner: () => ({
+        runServer: mock(async () => {}),
+        uploadFile: mock(async () => {}),
+        downloadFile: mock(async () => {}),
+      }),
     });
     expect(clack.logStep).toHaveBeenCalledWith(expect.stringContaining("1.2.3.4"));
   });
-});
-
-// ── Tests: fixSpawn success message ──────────────────────────────────────────
-// (error paths are covered in cmd-fix.test.ts; this covers the exact success message)
-
-describe("fixSpawn connection edge cases", () => {
-  beforeEach(() => {
-    clack.logError.mockReset();
-    clack.logSuccess.mockReset();
-    clack.logStep.mockReset();
-  });
 
   it("shows success when fix script succeeds", async () => {
-    const mockRunner = mock(async () => true);
     const record = makeRecord();
     await fixSpawn(record, mockManifest, {
-      runScript: mockRunner,
+      makeRunner: () => ({
+        runServer: mock(async () => {}),
+        uploadFile: mock(async () => {}),
+        downloadFile: mock(async () => {}),
+      }),
     });
     expect(clack.logSuccess).toHaveBeenCalledWith(expect.stringContaining("fixed successfully"));
   });

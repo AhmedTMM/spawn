@@ -22,6 +22,7 @@ import {
   validateServerIdentifier,
   validateUsername,
 } from "../security.js";
+import { trackSpawnDeleted } from "../shared/lifecycle-telemetry.js";
 import { getHistoryPath } from "../shared/paths.js";
 import { asyncTryCatch, asyncTryCatchIf, isNetworkError, tryCatch } from "../shared/result.js";
 import { ensureSpriteAuthenticated, ensureSpriteCli, destroyServer as spriteDestroyServer } from "../sprite/sprite.js";
@@ -74,6 +75,12 @@ async function ensureDeleteCredentials(record: SpawnRecord): Promise<void> {
       await ensureSpriteCli();
       await ensureSpriteAuthenticated();
       break;
+    case "daytona": {
+      const { ensureDaytonaAuthenticated, validateDaytonaConnection } = await import("../daytona/daytona.js");
+      validateDaytonaConnection(conn);
+      await ensureDaytonaAuthenticated();
+      break;
+    }
     default:
       break;
   }
@@ -176,6 +183,18 @@ async function execDeleteServer(record: SpawnRecord): Promise<boolean> {
         await spriteDestroyServer(id);
       });
 
+    case "daytona":
+      return tryDelete(async () => {
+        const {
+          destroyServer: daytonaDestroyServer,
+          ensureDaytonaAuthenticated,
+          validateDaytonaConnection,
+        } = await import("../daytona/daytona.js");
+        validateDaytonaConnection(conn);
+        await ensureDaytonaAuthenticated();
+        await daytonaDestroyServer(id);
+      });
+
     default:
       p.log.error(`No delete handler for cloud: ${conn.cloud}`);
       return false;
@@ -241,6 +260,8 @@ export async function confirmAndDelete(
   if (success) {
     const detail = lastMessage ? `: ${lastMessage}` : "";
     p.log.success(`Server "${label}" deleted${detail}`);
+    // Lifecycle telemetry: lifetime hours + final login count.
+    trackSpawnDeleted(record);
   } else {
     const detail = lastMessage ? `: ${lastMessage}` : "";
     p.log.error(`Failed to delete "${label}"${detail}`);
@@ -301,8 +322,11 @@ export async function pullChildHistory(record: SpawnRecord): Promise<void> {
     const childRecords: SpawnRecord[] = [];
     for (const el of parsed) {
       const result = v.safeParse(SpawnRecordSchema, el);
-      if (result.success) {
-        childRecords.push(result.output);
+      if (result.success && result.output.id) {
+        childRecords.push({
+          ...result.output,
+          id: result.output.id,
+        });
       }
     }
     if (childRecords.length > 0) {
@@ -427,6 +451,8 @@ export async function cmdDelete(
       const ok = await execDeleteServer(record);
       if (ok) {
         p.log.success(`Server "${label}" deleted`);
+        // Lifecycle telemetry: headless path also fires the event.
+        trackSpawnDeleted(record);
       }
     }
     return;
