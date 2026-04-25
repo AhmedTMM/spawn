@@ -1,8 +1,6 @@
 name: Gate
 
 on:
-  issues:
-    types: [opened]
   pull_request_target:
     types: [opened]
 
@@ -57,28 +55,15 @@ jobs:
               return;
             }
 
-            console.log(`${sender} is NOT a member or collaborator, closing.`);
+            console.log(`${sender} is NOT a member or collaborator, closing PR.`);
 
-            if (context.payload.issue) {
-              await github.rest.issues.update({
-                ...context.repo,
-                issue_number: context.payload.issue.number,
-                state: 'closed',
-              });
-              await github.rest.issues.createComment({
-                ...context.repo,
-                issue_number: context.payload.issue.number,
-                body: 'This repository only accepts issues from organization members and collaborators. Your issue has been closed automatically.',
-              });
-            } else if (context.payload.pull_request) {
-              await github.rest.pulls.update({
-                ...context.repo,
-                pull_number: context.payload.pull_request.number,
-                state: 'closed',
-              });
-              await github.rest.issues.createComment({
-                ...context.repo,
-                issue_number: context.payload.pull_request.number,
-                body: 'This repository only accepts pull requests from organization members and collaborators. Your PR has been closed automatically.',
-              });
-            }
+            await github.rest.pulls.update({
+              ...context.repo,
+              pull_number: context.payload.pull_request.number,
+              state: 'closed',
+            });
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.payload.pull_request.number,
+              body: 'This repository only accepts pull requests from organization members and collaborators. Your PR has been closed automatically.',
+            });
