@@ -13,9 +13,9 @@ fi
 
 # Validate agent name against allowed list to prevent injection
 case "${AGENT_NAME}" in
-  openclaw|codex|kilocode|claude|opencode|hermes|junie) ;;
+  openclaw|codex|kilocode|claude|opencode|hermes|junie|cursor) ;;
   *)
-    printf 'Error: Invalid agent name: %s\nAllowed: openclaw, codex, kilocode, claude, opencode, hermes, junie\n' "${AGENT_NAME}" >&2
+    printf 'Error: Invalid agent name: %s\nAllowed: openclaw, codex, kilocode, claude, opencode, hermes, junie, cursor\n' "${AGENT_NAME}" >&2
     exit 1
     ;;
 esac
@@ -50,6 +50,12 @@ case "${AGENT_NAME}" in
     # The hermes installer (uv tool) creates the actual binary + venv under ~/.hermes/.
     # Without this, the ~/.local/bin/hermes symlink is dangling after tarball extraction.
     echo "/root/.hermes/" >> "${PATHS_FILE}"
+    ;;
+  cursor)
+    # Cursor installs to ~/.local/bin/agent (since 2026-03-25) with the
+    # extracted package under ~/.local/share/cursor-agent/.
+    echo "/root/.local/bin/" >> "${PATHS_FILE}"
+    echo "/root/.local/share/cursor-agent/" >> "${PATHS_FILE}"
     ;;
   *)
     echo "Unknown agent: ${AGENT_NAME}" >&2
