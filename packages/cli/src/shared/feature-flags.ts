@@ -7,8 +7,10 @@
 // Behavior:
 //   - 1.5s timeout, fail-open (variants treated as missing — control wins)
 //   - On-disk cache at $SPAWN_HOME/feature-flags-cache.json with 1h TTL
-//   - Stale-while-revalidate: cached value used immediately, refresh fires
-//     in the background and lands for the next invocation
+//   - Stale-while-revalidate:
+//       • fresh cache (<TTL)  → use cache, no network call
+//       • stale cache (≥TTL)  → use cache immediately, refresh in background
+//       • no cache            → await a sync fetch (first run only)
 //   - SPAWN_FEATURE_FLAGS_DISABLED=1 disables fetch + lookup entirely
 //   - getFeatureFlag() captures a $feature_flag_called event the first time
 //     a key is read, so PostHog can attribute conversions
@@ -42,9 +44,14 @@ const CacheFileSchema = v.object({
 });
 
 type FlagMap = Record<string, string | boolean>;
+type CacheEntry = {
+  flags: FlagMap;
+  fetchedAt: number;
+};
 
 let _flags: FlagMap | null = null;
 let _initialized = false;
+let _backgroundRefresh: Promise<void> | null = null;
 const _exposed = new Set<string>();
 
 function getCachePath(): string {
@@ -55,7 +62,10 @@ function isDisabled(): boolean {
   return process.env.SPAWN_FEATURE_FLAGS_DISABLED === "1";
 }
 
-function readCache(): FlagMap | null {
+/** Read the cache file. Returns the entry (including fetchedAt) or null if
+ * the file is missing/corrupt. Does NOT filter by TTL — callers decide
+ * whether the entry is fresh enough. */
+function readCache(): CacheEntry | null {
   const readResult = tryCatch(() => readFileSync(getCachePath(), "utf8"));
   if (!readResult.ok) {
     return null;
@@ -64,10 +74,14 @@ function readCache(): FlagMap | null {
   if (!parsed) {
     return null;
   }
-  if (Date.now() - parsed.fetchedAt > CACHE_TTL_MS) {
-    return null;
-  }
-  return parsed.flags;
+  return {
+    flags: parsed.flags,
+    fetchedAt: parsed.fetchedAt,
+  };
+}
+
+function isFresh(entry: CacheEntry): boolean {
+  return Date.now() - entry.fetchedAt <= CACHE_TTL_MS;
 }
 
 function writeCache(flags: FlagMap): void {
@@ -120,9 +134,23 @@ async function fetchFlags(): Promise<FlagMap | null> {
   return parsed.featureFlags ?? {};
 }
 
+/** Background refresh: fetch, write cache, swallow errors. Fire-and-forget
+ * by callers, but exported promise lets tests await completion. */
+function startBackgroundRefresh(): Promise<void> {
+  return fetchFlags().then((fresh) => {
+    if (fresh) {
+      _flags = fresh;
+      writeCache(fresh);
+    }
+  });
+}
+
 /**
- * Initialize feature flags. Reads disk cache synchronously for immediate
- * availability, then fires a background refresh if the cache is stale.
+ * Initialize feature flags. Implements stale-while-revalidate against the
+ * on-disk cache:
+ *   - fresh cache (<TTL):   use cache immediately, no network call
+ *   - stale cache (≥TTL):   use cache immediately, refresh in background
+ *   - no cache:             await a sync fetch (first run only)
  *
  * Idempotent — safe to call multiple times.
  */
@@ -135,12 +163,18 @@ export async function initFeatureFlags(): Promise<void> {
 
   const cached = readCache();
   if (cached) {
-    _flags = cached;
+    // Use the cached value immediately so this call is ~instant.
+    _flags = cached.flags;
+    if (!isFresh(cached)) {
+      // Stale — refresh in the background. The refresh runs fire-and-forget;
+      // if the process exits before it completes, the next run will refresh.
+      _backgroundRefresh = startBackgroundRefresh();
+    }
     return;
   }
 
-  // No fresh cache — fetch synchronously (with timeout) so the first
-  // invocation still gets a variant.
+  // No cache at all — await a sync fetch so the first run still gets a
+  // variant. Bounded by FETCH_TIMEOUT_MS; fail-open on timeout/error.
   const fresh = await fetchFlags();
   if (fresh) {
     _flags = fresh;
@@ -171,5 +205,12 @@ export function getFeatureFlag<T extends string | boolean>(key: string, fallback
 export function _resetFeatureFlagsForTest(): void {
   _flags = null;
   _initialized = false;
+  _backgroundRefresh = null;
   _exposed.clear();
+}
+
+/** Test-only: await the in-flight background refresh (if any). Returns
+ * immediately when there is no refresh pending. */
+export function _awaitBackgroundRefreshForTest(): Promise<void> {
+  return _backgroundRefresh ?? Promise.resolve();
 }

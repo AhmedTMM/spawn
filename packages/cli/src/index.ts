@@ -846,14 +846,11 @@ async function dispatchCommand(
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
 
-  // Fetch feature flags early (1.5s timeout, fail-open). Must run before any
-  // code path that gates on a flag — currently the SPAWN_BETA composition
-  // for the `fast_provision` experiment.
-  await initFeatureFlags();
-
   // ── `spawn pick` — bypass all flag parsing; used by bash scripts ──────────
   // Must be handled before expandEqualsFlags / resolvePrompt so that pick's
   // own --prompt flag is not mistakenly consumed by the top-level prompt logic.
+  // Runs before initFeatureFlags() — this is a hot path called by shell
+  // scripts and must stay fast; it has no code paths that gate on a flag.
   if (rawArgs[0] === "pick") {
     const pickResult = await asyncTryCatch(() => cmdPick(expandEqualsFlags(rawArgs.slice(1))));
     if (!pickResult.ok) {
@@ -863,10 +860,17 @@ async function main(): Promise<void> {
   }
 
   // ── `spawn feedback` — bypass flag parsing; rest of args are the message ───
+  // Also runs before initFeatureFlags() for the same reason as `pick`.
   if (rawArgs[0] === "feedback") {
     await cmdFeedback(rawArgs.slice(1));
     return;
   }
+
+  // Fetch feature flags (1.5s timeout, fail-open). Must run before any code
+  // path that gates on a flag — currently the SPAWN_BETA composition for the
+  // `fast_provision` experiment. Placed AFTER the pick/feedback bypasses so
+  // those fast paths never pay the flag-fetch cost.
+  await initFeatureFlags();
 
   const args = expandEqualsFlags(rawArgs);
 

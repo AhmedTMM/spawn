@@ -3,7 +3,12 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { _resetFeatureFlagsForTest, getFeatureFlag, initFeatureFlags } from "../shared/feature-flags.js";
+import {
+  _awaitBackgroundRefreshForTest,
+  _resetFeatureFlagsForTest,
+  getFeatureFlag,
+  initFeatureFlags,
+} from "../shared/feature-flags.js";
 import { _resetInstallIdCache } from "../shared/install-id.js";
 import { getSpawnDir } from "../shared/paths.js";
 
@@ -104,7 +109,7 @@ describe("feature flags", () => {
       expect(getFeatureFlag("fast_provision", "control")).toBe("control");
     });
 
-    it("ignores stale cache (>1h old) and re-fetches", async () => {
+    it("serves stale cache (>1h old) immediately and refreshes in the background", async () => {
       writeCache(
         {
           fast_provision: "stale",
@@ -123,7 +128,30 @@ describe("feature flags", () => {
         ),
       );
       await initFeatureFlags();
+      // Stale value is served immediately — this is the point of SWR.
+      expect(getFeatureFlag("fast_provision", "control")).toBe("stale");
+      // After the background refresh settles, the fresh value takes over.
+      await _awaitBackgroundRefreshForTest();
+      _resetFeatureFlagsForTest();
+      await initFeatureFlags();
       expect(getFeatureFlag("fast_provision", "control")).toBe("fresh");
+    });
+
+    it("does NOT fetch when cache is fresh (<1h old)", async () => {
+      writeCache(
+        {
+          fast_provision: "cached",
+        },
+        5 * 60 * 1000,
+      );
+      let fetched = false;
+      global.fetch = mock(() => {
+        fetched = true;
+        return Promise.resolve(new Response("{}"));
+      });
+      await initFeatureFlags();
+      expect(fetched).toBe(false);
+      expect(getFeatureFlag("fast_provision", "control")).toBe("cached");
     });
 
     it("writes the response to the cache file", async () => {
