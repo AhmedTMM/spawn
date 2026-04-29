@@ -460,7 +460,7 @@ export async function ensureDocker(): Promise<void> {
       process.exit(1);
     }
   } else {
-    logStep("Docker not found — installing docker.io...");
+    logStep("Docker not found — installing via get.docker.com...");
     const hasSudo =
       Bun.spawnSync(
         [
@@ -475,12 +475,12 @@ export async function ensureDocker(): Promise<void> {
           ],
         },
       ).exitCode === 0;
-    const prefix = hasSudo ? "sudo " : "";
+    const shellCmd = hasSudo ? "sudo sh" : "sh";
     const result = Bun.spawnSync(
       [
         "bash",
         "-c",
-        `${prefix}apt-get update -qq && ${prefix}apt-get install -y -qq docker.io`,
+        `curl -fsSL https://get.docker.com | ${shellCmd}`,
       ],
       {
         stdio: [
@@ -491,7 +491,7 @@ export async function ensureDocker(): Promise<void> {
       },
     );
     if (result.exitCode !== 0) {
-      logInfo("Auto-install failed. Install Docker manually: sudo apt-get install docker.io");
+      logInfo("Auto-install failed. Install Docker manually: https://docs.docker.com/engine/install/");
       process.exit(1);
     }
   }
