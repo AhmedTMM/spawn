@@ -959,12 +959,12 @@ async function main(): Promise<void> {
 
   // fast_provision experiment: if the user did NOT pass --beta or --fast,
   // bucket them on the PostHog `fast_provision` flag. The `test` variant
-  // turns on tarball + images by default; control behaves as before.
+  // turns on images by default; control behaves as before.
   // Exposure is captured for both variants so PostHog can compute conversion.
   if (!userOptedIntoBeta) {
     const variant = getFeatureFlag("fast_provision", "control");
     if (variant === "test") {
-      betaFeatures.push("tarball", "images");
+      betaFeatures.push("images");
     }
   }
 
