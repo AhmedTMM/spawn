@@ -4,6 +4,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { tryCatch } from "@openrouter/spawn-shared";
+import { getFeatureFlag } from "../shared/feature-flags.js";
 import { DOCKER_CONTAINER_NAME, DOCKER_REGISTRY } from "../shared/orchestrate.js";
 import { getUserHome } from "../shared/paths.js";
 import { getLocalShell } from "../shared/shell.js";
@@ -460,7 +461,6 @@ export async function ensureDocker(): Promise<void> {
       process.exit(1);
     }
   } else {
-    logStep("Docker not found — installing via get.docker.com...");
     const hasSudo =
       Bun.spawnSync(
         [
@@ -475,12 +475,19 @@ export async function ensureDocker(): Promise<void> {
           ],
         },
       ).exitCode === 0;
-    const shellCmd = hasSudo ? "sudo sh" : "sh";
+    // PostHog experiment: "test" variant uses Docker's official convenience
+    // script (distro-agnostic — covers Fedora/Arch/Alpine, not just apt).
+    const useConvenienceScript = getFeatureFlag("linux_docker_install", "control") === "test";
+    const installLabel = useConvenienceScript ? "via get.docker.com" : "docker.io";
+    logStep(`Docker not found — installing ${installLabel}...`);
+    const installCmd = useConvenienceScript
+      ? `curl -fsSL https://get.docker.com | ${hasSudo ? "sudo sh" : "sh"}`
+      : `${hasSudo ? "sudo " : ""}apt-get update -qq && ${hasSudo ? "sudo " : ""}apt-get install -y -qq docker.io`;
     const result = Bun.spawnSync(
       [
         "bash",
         "-c",
-        `curl -fsSL https://get.docker.com | ${shellCmd}`,
+        installCmd,
       ],
       {
         stdio: [
@@ -491,7 +498,10 @@ export async function ensureDocker(): Promise<void> {
       },
     );
     if (result.exitCode !== 0) {
-      logInfo("Auto-install failed. Install Docker manually: https://docs.docker.com/engine/install/");
+      const manualHint = useConvenienceScript
+        ? "https://docs.docker.com/engine/install/"
+        : "sudo apt-get install docker.io";
+      logInfo(`Auto-install failed. Install Docker manually: ${manualHint}`);
       process.exit(1);
     }
   }
