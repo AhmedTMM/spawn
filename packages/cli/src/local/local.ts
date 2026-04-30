@@ -4,7 +4,6 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { tryCatch } from "@openrouter/spawn-shared";
-import { getFeatureFlag } from "../shared/feature-flags.js";
 import { DOCKER_CONTAINER_NAME, DOCKER_REGISTRY } from "../shared/orchestrate.js";
 import { getUserHome } from "../shared/paths.js";
 import { getLocalShell } from "../shared/shell.js";
@@ -475,14 +474,27 @@ export async function ensureDocker(): Promise<void> {
           ],
         },
       ).exitCode === 0;
-    // PostHog experiment: "test" variant uses Docker's official convenience
-    // script (distro-agnostic — covers Fedora/Arch/Alpine, not just apt).
-    const useConvenienceScript = getFeatureFlag("linux_docker_install", "control") === "test";
-    const installLabel = useConvenienceScript ? "via get.docker.com" : "docker.io";
+    const hasApt =
+      Bun.spawnSync(
+        [
+          "which",
+          "apt-get",
+        ],
+        {
+          stdio: [
+            "ignore",
+            "ignore",
+            "ignore",
+          ],
+        },
+      ).exitCode === 0;
+    // Prefer apt-get on Debian/Ubuntu (small, fast, distro-trusted).
+    // Fall back to Docker's convenience script for Fedora/Arch/Alpine/etc.
+    const installLabel = hasApt ? "docker.io" : "via get.docker.com";
     logStep(`Docker not found — installing ${installLabel}...`);
-    const installCmd = useConvenienceScript
-      ? `curl -fsSL https://get.docker.com | ${hasSudo ? "sudo sh" : "sh"}`
-      : `${hasSudo ? "sudo " : ""}apt-get update -qq && ${hasSudo ? "sudo " : ""}apt-get install -y -qq docker.io`;
+    const installCmd = hasApt
+      ? `${hasSudo ? "sudo " : ""}apt-get update -qq && ${hasSudo ? "sudo " : ""}apt-get install -y -qq docker.io`
+      : `curl -fsSL https://get.docker.com | ${hasSudo ? "sudo sh" : "sh"}`;
     const result = Bun.spawnSync(
       [
         "bash",
@@ -498,9 +510,7 @@ export async function ensureDocker(): Promise<void> {
       },
     );
     if (result.exitCode !== 0) {
-      const manualHint = useConvenienceScript
-        ? "https://docs.docker.com/engine/install/"
-        : "sudo apt-get install docker.io";
+      const manualHint = hasApt ? "sudo apt-get install docker.io" : "https://docs.docker.com/engine/install/";
       logInfo(`Auto-install failed. Install Docker manually: ${manualHint}`);
       process.exit(1);
     }
