@@ -319,8 +319,7 @@ describe("generateSshKey", () => {
     // Simulate another process having already generated the key
     const { privPath, pubPath } = createFakeKeyPair("id_ed25519", "ed25519");
 
-    // Mock getKeyType to return ED25519 for the existing key
-    const spawnSpy = spyOn(Bun, "spawnSync").mockReturnValue(sshKeygenLfResult("ED25519"));
+    const spawnSpy = spyOn(Bun, "spawnSync").mockImplementation(smartSshKeygenMock());
 
     const pair = generateSshKey();
     spawnSpy.mockRestore();
@@ -328,6 +327,21 @@ describe("generateSshKey", () => {
     expect(pair.type).toBe("ED25519");
     expect(pair.privPath).toBe(privPath);
     expect(pair.pubPath).toBe(pubPath);
+  });
+
+  it("throws with actionable error when existing keypair files don't match", () => {
+    // User has ~/.ssh/id_ed25519 + .pub but they don't pair (e.g. .pub was
+    // copied from another machine). discoverSshKeys filters this out, then
+    // ensureSshKeys falls through to generateSshKey — which must NOT silently
+    // resurrect the broken pair via the "files already exist" reuse path.
+    createFakeKeyPair("id_ed25519", "ed25519");
+    const spawnSpy = spyOn(Bun, "spawnSync").mockImplementation(
+      smartSshKeygenMock({
+        mismatch: true,
+      }),
+    );
+    expect(() => generateSshKey()).toThrow(/do not match/);
+    spawnSpy.mockRestore();
   });
 });
 

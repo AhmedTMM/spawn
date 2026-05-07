@@ -262,6 +262,15 @@ export function generateSshKey(): SshKeyPair {
   // reuse it instead of failing. ssh-keygen prompts for overwrite on stdin,
   // which fails when stdin is "ignore".
   if (existsSync(privPath) && existsSync(pubPath)) {
+    // Refuse to reuse a known-broken pair — otherwise discoverSshKeys filtering
+    // mismatched keys is bypassed by this fallback and SSH will still fail.
+    if (verifyKeyPair(privPath, pubPath) === "mismatch") {
+      throw new Error(
+        `SSH keypair at ${privPath} and ${pubPath} do not match. ` +
+          `Replace ${pubPath} with one derived from the matching private key, ` +
+          `or move both files aside (e.g. 'mv ${privPath}{,.broken} && mv ${pubPath}{,.broken}') and rerun spawn to generate a fresh keypair.`,
+      );
+    }
     logInfo("SSH key already exists, reusing");
     const keyType = getKeyType(pubPath);
     return {
@@ -297,6 +306,13 @@ export function generateSshKey(): SshKeyPair {
     // Another process may have created the key between our check and ssh-keygen.
     // Re-check before throwing.
     if (existsSync(privPath) && existsSync(pubPath)) {
+      if (verifyKeyPair(privPath, pubPath) === "mismatch") {
+        throw new Error(
+          `SSH keypair at ${privPath} and ${pubPath} do not match. ` +
+            `Replace ${pubPath} with one derived from the matching private key, ` +
+            "or move both files aside and rerun spawn to generate a fresh keypair.",
+        );
+      }
       logInfo("SSH key created by another process, reusing");
       const keyType = getKeyType(pubPath);
       return {

@@ -87,18 +87,22 @@ describe("generateSshKey race recovery", () => {
     const privPath = join(sshDir, "id_ed25519");
     const pubPath = `${privPath}.pub`;
 
-    let callCount = 0;
-    const spawnSpy = spyOn(Bun, "spawnSync").mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
+    let firstKeygenCall = true;
+    const spawnSpy = spyOn(Bun, "spawnSync").mockImplementation((args: string[]) => {
+      if (args[1] === "-t" && firstKeygenCall) {
         // First call: ssh-keygen -t ed25519 fails, but files appear (race)
+        firstKeygenCall = false;
         writeFileSync(privPath, "fake-priv\n", {
           mode: 0o600,
         });
         writeFileSync(pubPath, "ssh-ed25519 AAAA fake\n");
         return makeSyncResult("", 1); // non-zero exit
       }
-      // Second call: ssh-keygen -lf for getKeyType
+      if (args[1] === "-y") {
+        // verifyKeyPair: return the matching .pub contents so race-recovery proceeds
+        return makeSyncResult("ssh-ed25519 AAAA fake\n");
+      }
+      // ssh-keygen -lf for getKeyType
       return makeSyncResult("256 SHA256:abc user@host (ED25519)");
     });
 
